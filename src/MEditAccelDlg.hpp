@@ -17,15 +17,14 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //////////////////////////////////////////////////////////////////////////////
 
-#ifndef MZC4_MEDITACCELDLG_HPP_
-#define MZC4_MEDITACCELDLG_HPP_
+#pragma once
 
+#include "resource.h"
 #include "MWindowBase.hpp"
 #include "RisohSettings.hpp"
 #include "ConstantsDB.hpp"
 #include "MResizable.hpp"
 #include "MComboBoxAutoComplete.hpp"
-#include "resource.h"
 
 #include "AccelRes.hpp"
 
@@ -723,7 +722,3 @@ public:
         }
     }
 };
-
-//////////////////////////////////////////////////////////////////////////////
-
-#endif  // ndef MZC4_MEDITACCELDLG_HPP_

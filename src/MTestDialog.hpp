@@ -17,18 +17,42 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //////////////////////////////////////////////////////////////////////////////
 
-#ifndef MZC4_MTESTDIALOG_HPP_
-#define MZC4_MTESTDIALOG_HPP_
+#pragma once
 
 #include "MWindowBase.hpp"
 #include "MenuRes.hpp"
 #include "DialogRes.hpp"
 #include "DlgInit.h"
 #include "Res.hpp"
-
 #include <map>
+#include "MOleHost.hpp"
 
 //////////////////////////////////////////////////////////////////////////////
+
+#ifdef ATL_SUPPORT
+template <class StringType, class Helper, typename Helper::ReturnType(WINAPI* pFunc)(HINSTANCE, LPCDLGTEMPLATE, HWND, DLGPROC, LPARAM)>
+typename Helper::ReturnType AtlAxDialogCreateIndirectT(
+    HINSTANCE hInstance,
+    const VOID *pTemplate,
+    HWND hWndParent,
+    DLGPROC lpDialogProc,
+    LPARAM dwInitParam)
+{
+    AtlAxWinInit();
+    typename Helper::ReturnType nRet = Helper::GetInvalidValue();
+
+    DLGTEMPLATE* pDlg = (DLGTEMPLATE*)pTemplate;
+    if (pDlg != NULL)
+    {
+        LPDLGTEMPLATE lpDialogTemplate;
+        lpDialogTemplate = _DialogSplitHelper::SplitDialogTemplate(pDlg, NULL);
+        nRet = (*pFunc)(hInstance, lpDialogTemplate, hWndParent, lpDialogProc, dwInitParam);
+        if ((lpDialogTemplate != pDlg) && (lpDialogTemplate != NULL))
+            GlobalFree(GlobalHandle(lpDialogTemplate));
+    }
+    return nRet;
+}
+#endif
 
 class MTestDialog : public MDialogBase
 {
@@ -42,10 +66,12 @@ public:
     MTitleToIcon    m_title_to_icon;
     INT             m_xDialogBaseUnit;
     INT             m_yDialogBaseUnit;
+    MOleHost *m_pOleHost;
 
     MTestDialog(DialogRes& dialog_res, MIdOrString menu, WORD lang, const std::vector<BYTE>& dlginit_data)
         : m_dialog_res(dialog_res), m_menu(menu), 
-          m_lang(lang), m_hMenu(NULL), m_dlginit_data(dlginit_data)
+          m_lang(lang), m_hMenu(NULL), m_dlginit_data(dlginit_data),
+          m_pOleHost(NULL)
     {
         m_xDialogBaseUnit = LOWORD(GetDialogBaseUnits());
         m_yDialogBaseUnit = HIWORD(GetDialogBaseUnits());
@@ -113,6 +139,9 @@ public:
 
     BOOL OnInitDialog(HWND hwnd, HWND hwndFocus, LPARAM lParam)
     {
+        if (m_pOleHost)
+            m_pOleHost->DoEnableMenu(TRUE);
+
         if (m_hMenu)
         {
             SetMenu(hwnd, NULL);
@@ -144,7 +173,7 @@ public:
              hCtrl; hCtrl = GetNextWindow(hCtrl, GW_HWNDNEXT))
         {
             DWORD style = GetWindowStyle(hCtrl);
-            SIZE siz;
+            SIZE siz = { 0, 0 };
             GetWindowPosDx(hCtrl, NULL, &siz);
 
             WCHAR szClass[32];
@@ -213,6 +242,12 @@ public:
             EndDialog(IDOK);
         else
             DestroyWindow(*this);
+
+        if (m_pOleHost)
+        {
+            delete m_pOleHost;
+            m_pOleHost = NULL;
+        }
     }
 
     virtual INT_PTR CALLBACK
@@ -243,8 +278,71 @@ public:
         }
         return DefaultProcDx();
     }
+
+    INT_PTR DialogBoxIndirectDx(HWND hwndOwner, const VOID* ptr)
+    {
+        if (hwndOwner)
+        {
+            m_hwndOwner = hwndOwner;
+        }
+
+        if (m_pOleHost)
+        {
+            delete m_pOleHost;
+            m_pOleHost = NULL;
+        }
+        m_pOleHost = new MOleHost();
+        DoSetActiveOleHost(m_pOleHost);
+
+        m_bModal = TRUE;
+#ifdef ATL_SUPPORT
+        INT_PTR nID = AtlAxDialogCreateIndirectT<LPCWSTR, _AtlDialogBoxIndirectParamHelper, ::DialogBoxIndirectParamW>(
+            ::GetModuleHandle(NULL), ptr, m_hwndOwner, MDialogBase::DialogProc, reinterpret_cast<LPARAM>(this));
+#else
+        INT_PTR nID = ::DialogBoxIndirectParam(::GetModuleHandle(NULL),
+            (const DLGTEMPLATE*)ptr,
+            m_hwndOwner,
+            MDialogBase::DialogProc,
+            reinterpret_cast<LPARAM>(this));
+#endif
+        if (m_pOleHost)
+        {
+            delete m_pOleHost;
+            m_pOleHost = NULL;
+        }
+        return nID;
+    }
+
+    inline BOOL CreateDialogIndirectDx(HWND hwndOwner, const VOID *ptr)
+    {
+        if (hwndOwner)
+        {
+            m_hwndOwner = hwndOwner;
+        }
+
+        if (m_pOleHost)
+        {
+            delete m_pOleHost;
+            m_pOleHost = NULL;
+        }
+        m_pOleHost = new MOleHost();
+        DoSetActiveOleHost(m_pOleHost);
+
+        m_bModal = FALSE;
+#ifdef ATL_SUPPORT
+        HWND hwnd;
+        hwnd = AtlAxDialogCreateIndirectT<LPCWSTR, _AtlCreateDialogIndirectParamHelper, ::CreateDialogIndirectParamW>(
+            ::GetModuleHandle(NULL), ptr, m_hwndOwner, MDialogBase::DialogProc, reinterpret_cast<LPARAM>(this));
+#else
+        HWND hwnd = ::CreateDialogIndirectParam(::GetModuleHandle(NULL), 
+            reinterpret_cast<const DLGTEMPLATE *>(ptr), 
+            m_hwndOwner, MDialogBase::DialogProc, 
+            reinterpret_cast<LPARAM>(this));
+#endif
+        if (hwnd == NULL)
+        {
+            Detach();
+        }
+        return hwnd != NULL;
+    }
 };
-
-//////////////////////////////////////////////////////////////////////////////
-
-#endif  // ndef MZC4_MTESTDIALOG_HPP_

@@ -17,12 +17,11 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //////////////////////////////////////////////////////////////////////////////
 
-#ifndef MZC4_MCTRLDATADLG_HPP_
-#define MZC4_MCTRLDATADLG_HPP_
+#pragma once
 
+#include "resource.h"
 #include "MWindowBase.hpp"
 #include "MFile.hpp"
-#include "resource.h"
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -151,7 +150,3 @@ public:
         return DefaultProcDx();
     }
 };
-
-//////////////////////////////////////////////////////////////////////////////
-
-#endif  // ndef MZC4_MCTRLDATADLG_HPP_

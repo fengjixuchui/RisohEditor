@@ -17,9 +17,9 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //////////////////////////////////////////////////////////////////////////////
 
-#ifndef MZC4_MDLGINITDLG_HPP_
-#define MZC4_MDLGINITDLG_HPP_
+#pragma once
 
+#include "resource.h"
 #include "MWindowBase.hpp"
 #include "RisohSettings.hpp"
 #include "ConstantsDB.hpp"
@@ -27,7 +27,6 @@
 #include "MComboBoxAutoComplete.hpp"
 #include "MString.hpp"
 #include "DlgInitRes.hpp"
-#include "resource.h"
 #include "DlgInit.h"
 
 class MAddDlgInitDlg;
@@ -54,7 +53,6 @@ public:
         InitCtrlIDComboBox(hCmb1);
         SubclassChildDx(m_cmb1, cmb1);
 
-        HWND hCmb2 = GetDlgItem(hwnd, cmb2);
         SubclassChildDx(m_cmb2, cmb2);
 
         ExecuteDlgInitDx(hwnd, GetModuleHandle(NULL), MAKEINTRESOURCE(IDD_ADDDLGINIT));
@@ -188,7 +186,6 @@ public:
         SetDlgItemTextW(hwnd, cmb1, m_entry.sz0);
         SubclassChildDx(m_cmb1, cmb1);
 
-        HWND hCmb2 = GetDlgItem(hwnd, cmb2);
         SubclassChildDx(m_cmb2, cmb2);
         SetDlgItemTextW(hwnd, cmb2, m_entry.sz1);
 
@@ -725,7 +722,3 @@ public:
         }
     }
 };
-
-//////////////////////////////////////////////////////////////////////////////
-
-#endif  // ndef MZC4_MDLGINITDLG_HPP_

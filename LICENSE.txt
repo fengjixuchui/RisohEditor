@@ -1,36 +1,71 @@
-RisohEditor is a resource editor for Win32 development,
+﻿RisohEditor is a resource editor for Win32 development,
 created by Katayama Hirofumi MZ (katahiromz). RisohEditor
-was released under the terms of GNU GENERAL PUBLIC LICENSE
+is released under the terms of GNU GENERAL PUBLIC LICENSE
 Version 3, 29 June 2007. The source code of RisohEditor is
 available at https://github.com/katahiromz/RisohEditor .
 
-RisohEditor --- Win32 resource editor
-Copyright (C) 2017-2019 Katayama Hirofumi MZ <katayama.hirofumi.mz@gmail.com>.
+RisohEditor --- Another Win32 resource editor
+Copyright (C) 2017-2021 Katayama Hirofumi MZ <katayama.hirofumi.mz@gmail.com>.
+Copyright (C) 2019-2020 Linhong Xiang <lhxy24@163.com>.
+Copyright (C) 2019-2020 Dmitry Y <erodim@mail.ru>.
+Copyright (C) 2019-2020 Roberto Boriotti <roberto.boriotti@libero.it>.
+Copyright (C) 2020 Mas Ahmad Muhammad <m.charly81@gmail.com>.
+
 All rights reserved.
 ---------------------------------------------------
 RisohEditor contains the "windres" program. The "windres"
-program is a part of GNU Binutils, that was released under
+program is a part of GNU Binutils, that is released under
 the terms of GNU GENERAL PUBLIC LICENSE Version 3, 29 June
 2007. The source code of windres is available
 at http://sourceware.org/binutils/ .
 
-GNU windres (GNU Binutils) 2.30
-Copyright (C) 2018 Free Software Foundation, Inc.
+GNU windres (GNU Binutils) 2.36
+Copyright (C) 2021 Free Software Foundation, Inc.
 This program is free software; you may redistribute it under the terms of
 the GNU General Public License version 3 or (at your option) any later version.
 This program has absolutely no warranty.
 ---------------------------------------------------
-RisohEditor contains the "cpp" and "cc1" programs.
-The "cpp" and "cc1" programs are parts of The GNU Compiler
-Collection. The GNU Compiler Collection was released under
-the terms of GNU GENERAL PUBLIC LICENSE Version 3, 29 June
-2007. The source code of The GNU Compiler Collection is
-available at http://gcc.gnu.org .
+RisohEditor contains the "mcpp" program.
+The source code of mcpp is available at https://github.com/katahiromz/mcpp .
+mcpp is licensed under its special terms as below:
 
-cpp.exe (Rev1, Built by MSYS2 project) 7.3.0
-Copyright (C) 2017 Free Software Foundation, Inc.
-This is free software; see the source for copying conditions.  There is NO
-warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+/*-
+ * Copyright (c) 1998, 2002-2008 Kiyoshi Matsui <kmatsui@t3.rim.or.jp>
+ * All rights reserved.
+ *
+ * This software including the files in this directory is provided under
+ * the following license.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.
+ */
+
+---------------------------------------------------
+RisohEditor contains the "dfmsc" program.
+The source code of dfmsc is available at https://github.com/katahiromz/dfmsc .
+dfmsc is licensed under the MIT License.
+---------------------------------------------------
+RisohEditor contains the "TLB2IDL" programs.
+The source code of TLB2IDL is available at https://github.com/katahiromz/tlb2idl .
+TLB2IDL is licensed under the LGPLv3 License.
 ---------------------------------------------------
                     GNU GENERAL PUBLIC LICENSE
                        Version 3, 29 June 2007

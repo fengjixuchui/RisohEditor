@@ -17,16 +17,18 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //////////////////////////////////////////////////////////////////////////////
 
-#ifndef MZC4_MADDRESDLG_HPP_
-#define MZC4_MADDRESDLG_HPP_
+#pragma once
 
+#include "resource.h"
 #include "MWindowBase.hpp"
 #include "ConstantsDB.hpp"
 #include "Res.hpp"
 #include "MComboBoxAutoComplete.hpp"
-#include "resource.h"
 #include "DlgInit.h"
+#include "MLangAutoComplete.hpp"
 
+void InitComboBoxPlaceholder(HWND hCmb, UINT nStringID);
+void InitResTypeComboBox(HWND hCmb1, const MIdOrString& type);
 void InitLangComboBox(HWND hCmb3, LANGID langid);
 BOOL CheckTypeComboBox(HWND hCmb1, MIdOrString& type);
 BOOL CheckNameComboBox(HWND hCmb2, MIdOrString& name);
@@ -49,10 +51,23 @@ public:
     MComboBoxAutoComplete m_cmb1;
     MComboBoxAutoComplete m_cmb2;
     MComboBoxAutoComplete m_cmb3;
+    MLangAutoComplete *m_pAutoComplete;
 
-    MAddResDlg() : MDialogBase(IDD_ADDRES), m_type(0xFFFF), m_file(NULL)
+    MAddResDlg()
+        : MDialogBase(IDD_ADDRES)
+        , m_type(0xFFFF)
+        , m_file(NULL)
+        , m_pAutoComplete(new MLangAutoComplete())
     {
+        m_pAutoComplete->AddRef();
         m_cmb3.m_bAcceptSpace = TRUE;
+    }
+
+    ~MAddResDlg()
+    {
+        m_pAutoComplete->unbind();
+        m_pAutoComplete->Release();
+        m_pAutoComplete = NULL;
     }
 
     BOOL OnInitDialog(HWND hwnd, HWND hwndFocus, LPARAM lParam)
@@ -61,34 +76,14 @@ public:
         DragAcceptFiles(hwnd, TRUE);
 
         // for Types
-        INT k;
         HWND hCmb1 = GetDlgItem(hwnd, cmb1);
-
-        auto table = g_db.GetTable(L"RESOURCE");
-        for (auto& table_entry : table)
-        {
-            WCHAR sz[MAX_PATH];
-            StringCchPrintfW(sz, _countof(sz), L"%s (%lu)",
-                             table_entry.name.c_str(), table_entry.value);
-            k = ComboBox_AddString(hCmb1, sz);
-            if (m_type == WORD(table_entry.value))
-            {
-                ComboBox_SetCurSel(hCmb1, k);
-            }
-        }
-        table = g_db.GetTable(L"RESOURCE.STRING.TYPE");
-        for (auto& table_entry : table)
-        {
-            k = ComboBox_AddString(hCmb1, table_entry.name.c_str());
-            if (m_type == table_entry.name.c_str())
-            {
-                ComboBox_SetCurSel(hCmb1, k);
-            }
-        }
+        InitResTypeComboBox(hCmb1, m_type);
 
         // enable input complete
         SubclassChildDx(m_cmb1, cmb1);
         SubclassChildDx(m_cmb2, cmb2);
+
+        InitComboBoxPlaceholder(m_cmb2, IDS_INTEGERORIDENTIFIER);
 
         // set 1 to the name if it's a RT_VERSION
         if (m_type == RT_VERSION)
@@ -122,6 +117,12 @@ public:
 
         // select the type
         OnCmb1(hwnd);
+
+        // auto complete
+        COMBOBOXINFO info = { sizeof(info) };
+        GetComboBoxInfo(m_cmb3, &info);
+        HWND hwndEdit = info.hwndItem;
+        m_pAutoComplete->bind(hwndEdit);
 
         return FALSE;
     }
@@ -196,11 +197,16 @@ public:
         HWND hEdt1 = GetDlgItem(hwnd, edt1);
 
         // if there is no sample for the type, check if the file path exists
-        if (!HasSample(type, lang) && !Edt1_CheckFile(hEdt1, file))
+        if (!Edt1_CheckFile(hEdt1, file) && !HasSample(type, lang))
+        {
+            Edit_SetSel(hEdt1, 0, -1);  // select all
+            SetFocus(hEdt1);    // set focus
+            ErrorBoxDx(IDS_FILENOTFOUND);
             return;     // failure
+        }
 
         // find the language entry by type, name, lang
-        if (auto entry = g_res.find(ET_LANG, type, name, lang))
+        if (g_res.find(ET_LANG, type, name, lang))
         {
             // query overwriting
             INT id = MsgBoxDx(IDS_EXISTSOVERWRITE, MB_ICONINFORMATION | MB_YESNOCANCEL);
@@ -326,8 +332,16 @@ public:
     void OnCmb1(HWND hwnd)
     {
         // get the text of combobox cmb1
-        TCHAR szText[64];
-        ComboBox_GetText(m_cmb1, szText, ARRAYSIZE(szText));
+        TCHAR szText[256];
+        INT iItem = ComboBox_GetCurSel(m_cmb1);
+        if (iItem == CB_ERR)
+        {
+            ComboBox_GetText(m_cmb1, szText, ARRAYSIZE(szText));
+        }
+        else
+        {
+            ComboBox_GetLBText(m_cmb1, iItem, szText);
+        }
 
         // szText --> strIDType (trimmed)
         MString strIDType = szText;
@@ -376,11 +390,13 @@ public:
         {
             // the name is optional if RT_STRING, RT_MESSAGETABLE or RT_VERSION
             SetDlgItemText(hwnd, stc1, LoadStringDx(IDS_OPTIONAL));
+            InitComboBoxPlaceholder(m_cmb2, IDS_NOTEXT);
         }
         else
         {
             // otherwise the name is non-optional
             SetDlgItemText(hwnd, stc1, NULL);
+            InitComboBoxPlaceholder(m_cmb2, IDS_INTEGERORIDENTIFIER);
         }
 
         // iType (IDTYPE_*) --> prefix
@@ -471,7 +487,3 @@ public:
         return DefaultProcDx();
     }
 };
-
-//////////////////////////////////////////////////////////////////////////////
-
-#endif  // ndef MZC4_MADDRESDLG_HPP_

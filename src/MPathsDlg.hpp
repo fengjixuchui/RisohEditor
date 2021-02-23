@@ -17,13 +17,12 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //////////////////////////////////////////////////////////////////////////////
 
-#ifndef MZC4_MPATHSDLG_HPP_
-#define MZC4_MPATHSDLG_HPP_
+#pragma once
 
+#include "resource.h"
 #include "MWindowBase.hpp"
 #include "RisohSettings.hpp"
 #include "MResizable.hpp"
-#include "resource.h"
 
 class MPathsDlg;
 
@@ -456,7 +455,3 @@ public:
         return TRUE;
     }
 };
-
-//////////////////////////////////////////////////////////////////////////////
-
-#endif  // ndef MZC4_MPATHSDLG_HPP_

@@ -1,7 +1,7 @@
 // RisohEditor.hpp --- RisohEditor header
 //////////////////////////////////////////////////////////////////////////////
 // RisohEditor --- Another free Win32 resource editor
-// Copyright (C) 2017-2018 Katayama Hirofumi MZ <katayama.hirofumi.mz@gmail.com>
+// Copyright (C) 2017-2021 Katayama Hirofumi MZ <katayama.hirofumi.mz@gmail.com>
 // 
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -17,17 +17,13 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //////////////////////////////////////////////////////////////////////////////
 
-#ifndef RISOHEDITOR_HPP_
-#define RISOHEDITOR_HPP_
-
 #pragma once
-
-////////////////////////////////////////////////////////////////////////////
 
 #include <initguid.h>
 #include <windows.h>
 #include <windowsx.h>
 #include <shlobj.h>
+#include <shlwapi.h>
 #include <dlgs.h>
 #include <tchar.h>
 #include <commctrl.h>
@@ -36,6 +32,13 @@
 #include <mmsystem.h>
 #include <process.h>
 #include <uxtheme.h>
+#include <urlmon.h>
+#include <wininet.h>
+#ifdef ATL_SUPPORT
+    #include <cguid.h>
+    #include <atlbase.h>
+    #include <atlhost.h>
+#endif
 
 #include <algorithm>    // for std::sort
 #include <string>       // for std::string, std::wstring
@@ -47,16 +50,20 @@
 
 ////////////////////////////////////////////////////////////////////////////
 
+#include "resource.h"
 #include "MWindowBase.hpp"
 #include "MEditCtrl.hpp"
 #include "MSplitterWnd.hpp"
-#include "MRegKey.hpp"
+#ifdef PORTABLE
+    #include "MRegKeyPortable.hpp"
+#else
+    #include "MRegKey.hpp"
+#endif
 #include "MBitmapDx.hpp"
 #include "Res.hpp"
 #include "ConstantsDB.hpp"
 #include "MacroParser.hpp"
 #include "MWaitCursor.hpp"
-#include "resource.h"
 #include "RisohSettings.hpp"
 
 // RisohEditor.cpp
@@ -98,9 +105,14 @@ HBITMAP CreateBitmapFromIconDx(HICON hIcon, INT width, INT height, BOOL bCursor)
 #include "MSaveOptionsDlg.hpp"
 #include "MLangsDlg.hpp"
 #include "MTestParentWnd.hpp"
-#include "MOleCtrl.hpp"
 #include "MDlgInitDlg.hpp"
 #include "MEncodingDlg.hpp"
+#include "MConstantDlg.hpp"
+#include "MEgaDlg.hpp"
+#include "MReplaceDialogFontsDlg.hpp"
+#include "MDropdownArrow.hpp"
+#include "MTabCtrl.hpp"
+#include "MDfmSettingsDlg.hpp"
 
 #include "MString.hpp"
 #include "MByteStream.hpp"
@@ -122,18 +134,4 @@ HBITMAP CreateBitmapFromIconDx(HICON hIcon, INT width, INT height, BOOL bCursor)
 #include "MFile.hpp"
 #include "MProcessMaker.hpp"
 
-#pragma comment(lib, "comctl32.lib")
-#pragma comment(lib, "ole32.lib")
-#pragma comment(lib, "shell32.lib")
-#pragma comment(lib, "uuid.lib")
-
 #include "ResToText.hpp"
-
-////////////////////////////////////////////////////////////////////////////
-
-// TODO: Update the version number
-#define RE_VERSION  "5.1.8"
-
-////////////////////////////////////////////////////////////////////////////
-
-#endif  // ndef RISOHEDITOR_HPP_

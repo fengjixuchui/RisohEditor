@@ -17,14 +17,12 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //////////////////////////////////////////////////////////////////////////////
 
-#ifndef MZC4_MFONTSDLG_HPP_
-#define MZC4_MFONTSDLG_HPP_
+#pragma once
 
-#include "RisohEditor.hpp"
-#include "MString.hpp"
-#include "MHyperLinkCtrl.hpp"
-#include <commdlg.h>
 #include "resource.h"
+#include "MHyperLinkCtrl.hpp"
+#include "MString.hpp"
+#include <commdlg.h>
 
 class MFontsDlg;
 
@@ -271,7 +269,3 @@ public:
 protected:
     MHyperLinkCtrl m_hyperlink;
 };
-
-//////////////////////////////////////////////////////////////////////////////
-
-#endif  // ndef MZC4_MFONTSDLG_HPP_

@@ -12,33 +12,33 @@
 
 AppId={{AF7494D1-406F-4D04-A8FE-8F9DAB97F611}
 AppName=RisohEditor
-AppVerName=RisohEditor 5.1.8
+AppVerName=RisohEditor 5.5.2
 AppPublisher=Katayama Hirofumi MZ
 AppPublisherURL=http://katahiromz.web.fc2.com/
 AppSupportURL=http://katahiromz.web.fc2.com/
 AppUpdatesURL=http://katahiromz.web.fc2.com/
+; DefaultDirName={pf}\RisohEditor ; TODO: Fix #111
 DefaultDirName=C:\RisohEditor
 DefaultGroupName=RisohEditor
 DisableDirPage=no
 AllowNoIcons=yes
 LicenseFile=LICENSE.txt
 OutputDir=.
-OutputBaseFilename=risoheditor-5.1.8-setup
+OutputBaseFilename=RisohEditor-5.5.2-installer
 SetupIconFile=src\res\Icon_100.ico
 Compression=lzma
 SolidCompression=yes
 UninstallDisplayIcon={app}\RisohEditor.exe
 UsePreviousAppDir=yes
 VersionInfoCompany=Katayama Hirofumi MZ
-VersionInfoCopyright=Copyright (C) 2017-2019 Katayama Hirofumi MZ.
+VersionInfoCopyright=Copyright (C) 2017-2021 Katayama Hirofumi MZ.
 VersionInfoDescription=Win32 Resource Editor
 VersionInfoProductName=RisohEditor
-VersionInfoProductTextVersion=5.1.8
-VersionInfoProductVersion=5.1.8
-VersionInfoVersion=5.1.8
+VersionInfoProductTextVersion=5.5.2
+VersionInfoProductVersion=5.5.2
+VersionInfoVersion=5.5.2
 
 [Languages]
-Name: "armenian"; MessagesFile:  "compiler:Languages\Armenian.islu"
 Name: "brazilianportuguese"; MessagesFile:  "compiler:Languages\BrazilianPortuguese.isl"
 Name: "catalan"; MessagesFile:  "compiler:Languages\Catalan.isl"
 Name: "corsican"; MessagesFile:  "compiler:Languages\Corsican.isl"
@@ -54,7 +54,6 @@ Name: "hebrew"; MessagesFile:  "compiler:Languages\Hebrew.isl"
 Name: "hungarian"; MessagesFile:  "compiler:Languages\Hungarian.isl"
 Name: "italian"; MessagesFile:  "compiler:Languages\Italian.isl"
 Name: "japanese"; MessagesFile: "compiler:Languages\Japanese.isl"
-Name: "nepali"; MessagesFile: "compiler:Languages\Nepali.islu"
 Name: "norwegian"; MessagesFile: "compiler:Languages\Norwegian.isl"
 Name: "polish"; MessagesFile: "compiler:Languages\Polish.isl"
 Name: "portuguese"; MessagesFile: "compiler:Languages\Portuguese.isl"
@@ -67,92 +66,59 @@ Name: "spanish"; MessagesFile: "compiler:Languages\Spanish.isl"
 Name: "turkish"; MessagesFile: "compiler:Languages\Turkish.isl"
 Name: "ukrainian"; MessagesFile: "compiler:Languages\Ukrainian.isl"
 
-;; Unofficial Languages: https://github.com/jrsoftware/issrc/tree/master/Files/Languages/Unofficial
-;Name: "afrikaans"; MessagesFile: "compiler:Languages\Afrikaans.isl"
-;Name: "albanian"; MessagesFile: "compiler:Languages\Albanian.isl"
-;Name: "arabic"; MessagesFile: "compiler:Languages\Arabic.isl"
-;Name: "asturian"; MessagesFile: "compiler:Languages\Asturian.isl"
-;Name: "basque"; MessagesFile: "compiler:Languages\Basque.isl"
-;Name: "belarusian"; MessagesFile: "compiler:Languages\Belarusian.isl"
-;Name: "bengali"; MessagesFile: "compiler:Languages\Bengali.islu"
-;Name: "bosnian"; MessagesFile: "compiler:Languages\Bosnian.isl"
-;Name: "bulgarian"; MessagesFile: "compiler:Languages\Bulgarian.isl"
-;Name: "chinesesimplified"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
-;Name: "chinesetraditional"; MessagesFile: "compiler:Languages\ChineseTraditional.isl"
-;Name: "croatian"; MessagesFile: "compiler:Languages\Croatian.isl"
-;Name: "englishbritish"; MessagesFile: "compiler:Languages\EnglishBritish.isl"
-;Name: "esperanto"; MessagesFile: "compiler:Languages\Esperanto.isl"
-;Name: "estonian"; MessagesFile: "compiler:Languages\Estonian.isl"
-;Name: "farsi"; MessagesFile: "compiler:Languages\Farsi.isl"
-;Name: "galician"; MessagesFile: "compiler:Languages\Galician.isl"
-;Name: "georgian"; MessagesFile: "compiler:Languages\Georgian.islu"
-;Name: "hindi"; MessagesFile: "compiler:Languages\Hindi.islu"
-;Name: "indonesian"; MessagesFile: "compiler:Languages\Indonesian.isl"
-;Name: "kazakh"; MessagesFile: "compiler:Languages\Kazakh.islu"
-;Name: "korean"; MessagesFile: "compiler:Languages\Korean.isl"
-;Name: "kurdish"; MessagesFile: "compiler:Languages\Kurdish.isl"
-;Name: "latvian"; MessagesFile: "compiler:Languages\Latvian.isl"
-;Name: "ligurian"; MessagesFile: "compiler:Languages\Ligurian.isl"
-;Name: "lithuanian"; MessagesFile: "compiler:Languages\Lithuanian.isl"
-;Name: "luxemburgish"; MessagesFile: "compiler:Languages\Luxemburgish.isl"
-;Name: "macedonian"; MessagesFile: "compiler:Languages\Macedonian.isl"
-;Name: "malaysian"; MessagesFile: "compiler:Languages\Malaysian.isl"
-;Name: "mongolian"; MessagesFile: "compiler:Languages\Mongolian.isl"
-;Name: "montenegrian"; MessagesFile: "compiler:Languages\Montenegrian.isl"
-;Name: "norwegiannynorsk"; MessagesFile: "compiler:Languages\NorwegianNynorsk.isl"
-;Name: "occitan"; MessagesFile: "compiler:Languages\Occitan.isl"
-;Name: "romanian"; MessagesFile: "compiler:Languages\Romanian.isl"
-;Name: "slovak"; MessagesFile: "compiler:Languages\Slovak.isl"
-;Name: "swedish"; MessagesFile: "compiler:Languages\Swedish.isl"
-;Name: "tatar"; MessagesFile: "compiler:Languages\Tatar.isl"
-;Name: "thai"; MessagesFile: "compiler:Languages\Thai.isl"
-;Name: "uyghur"; MessagesFile: "compiler:Languages\Uyghur.islu"
-;Name: "uzbek"; MessagesFile: "compiler:Languages\Uzbek.isl"
-;Name: "valencian"; MessagesFile: "compiler:Languages\Valencian.isl"
-;Name: "vietnamese"; MessagesFile: "compiler:Languages\Vietnamese.islu"
-
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
+Name: "rc_association"; Description: "{cm:AssociateRcFiles}"
+Name: "res_association"; Description: "{cm:AssociateResFiles}"
 
 [Files]
 Source: "README.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "READMEJP.txt"; DestDir: "{app}"; Flags: ignoreversion
+Source: "READMEIT.txt"; DestDir: "{app}"; Flags: ignoreversion
+Source: "READMEKO.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "LICENSE.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "Standardize.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "HYOJUNKA.txt"; DestDir: "{app}"; Flags: ignoreversion
+Source: "TRANSLATORS.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "mcdx\MESSAGETABLEDX.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "build\RisohEditor.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "src\resource.h"; DestDir: "{app}"; Flags: ignoreversion
 Source: "data\Constants.txt"; DestDir: "{app}\data"; Flags: ignoreversion
-Source: "data\bin\cpp.exe"; DestDir: "{app}\data\bin"; Flags: ignoreversion
 Source: "build\mcdx.exe"; DestDir: "{app}\data\bin"; Flags: ignoreversion
-Source: "src\MOleCtrl.hpp"; DestDir: "{app}\OLE"; Flags: ignoreversion
-Source: "include\MWindowBase.hpp"; DestDir: "{app}\OLE"; Flags: ignoreversion
+Source: "src\MOleHost.hpp"; DestDir: "{app}\OLE"; Flags: ignoreversion
+Source: "src\MOleHost.cpp"; DestDir: "{app}\OLE"; Flags: ignoreversion
+Source: "src\MWindowBase.hpp"; DestDir: "{app}\OLE"; Flags: ignoreversion
 Source: "src\DlgInit.h"; DestDir: "{app}\DlgInit"; Flags: ignoreversion
 Source: "MyWndCtrl\MWindowBase.hpp"; DestDir: "{app}\MyWndCtrl"; Flags: ignoreversion
 Source: "MyWndCtrl\MyWndCtrl.cpp"; DestDir: "{app}\MyWndCtrl"; Flags: ignoreversion
 Source: "MyWndCtrl\CMakeLists.txt"; DestDir: "{app}\MyWndCtrl"; Flags: ignoreversion
 Source: "build\MyWndCtrl.dll"; DestDir: "{app}\MyWndCtrl"; Flags: ignoreversion
 Source: "data\bin\libgcc_s_dw2-1.dll"; DestDir: "{app}\data\bin"; Flags: ignoreversion
-Source: "data\bin\libgmp-10.dll"; DestDir: "{app}\data\bin"; Flags: ignoreversion
 Source: "data\bin\libwinpthread-1.dll"; DestDir: "{app}\data\bin"; Flags: ignoreversion
 Source: "data\bin\windres.exe"; DestDir: "{app}\data\bin"; Flags: ignoreversion
-Source: "data\bin\zlib1.dll"; DestDir: "{app}\data\bin"; Flags: ignoreversion
 Source: "data\bin\upx.exe"; DestDir: "{app}\data\bin"; Flags: ignoreversion
-Source: "data\lib\gcc\i686-w64-mingw32\7.3.0\cc1.exe"; DestDir: "{app}\data\lib\gcc\i686-w64-mingw32\7.3.0"; Flags: ignoreversion
-Source: "data\lib\gcc\i686-w64-mingw32\7.3.0\libgcc_s_dw2-1.dll"; DestDir: "{app}\data\lib\gcc\i686-w64-mingw32\7.3.0"; Flags: ignoreversion
-Source: "data\lib\gcc\i686-w64-mingw32\7.3.0\libgmp-10.dll"; DestDir: "{app}\data\lib\gcc\i686-w64-mingw32\7.3.0"; Flags: ignoreversion
-Source: "data\lib\gcc\i686-w64-mingw32\7.3.0\libwinpthread-1.dll"; DestDir: "{app}\data\lib\gcc\i686-w64-mingw32\7.3.0"; Flags: ignoreversion
-Source: "data\lib\gcc\i686-w64-mingw32\7.3.0\zlib1.dll"; DestDir: "{app}\data\lib\gcc\i686-w64-mingw32\7.3.0"; Flags: ignoreversion
-Source: "data\lib\gcc\i686-w64-mingw32\7.3.0\include\commctrl.h"; DestDir: "{app}\data\lib\gcc\i686-w64-mingw32\7.3.0\include"; Flags: ignoreversion
-Source: "data\lib\gcc\i686-w64-mingw32\7.3.0\include\dlgs.h"; DestDir: "{app}\data\lib\gcc\i686-w64-mingw32\7.3.0\include"; Flags: ignoreversion
-Source: "data\lib\gcc\i686-w64-mingw32\7.3.0\include\windef.h"; DestDir: "{app}\data\lib\gcc\i686-w64-mingw32\7.3.0\include"; Flags: ignoreversion
-Source: "data\lib\gcc\i686-w64-mingw32\7.3.0\include\windows.h"; DestDir: "{app}\data\lib\gcc\i686-w64-mingw32\7.3.0\include"; Flags: ignoreversion
-Source: "data\lib\gcc\i686-w64-mingw32\7.3.0\include\winnt.h"; DestDir: "{app}\data\lib\gcc\i686-w64-mingw32\7.3.0\include"; Flags: ignoreversion
-Source: "data\lib\gcc\i686-w64-mingw32\7.3.0\include\winresrc.h"; DestDir: "{app}\data\lib\gcc\i686-w64-mingw32\7.3.0\include"; Flags: ignoreversion
-Source: "data\lib\gcc\i686-w64-mingw32\7.3.0\include\winuser.h"; DestDir: "{app}\data\lib\gcc\i686-w64-mingw32\7.3.0\include"; Flags: ignoreversion
-Source: "data\lib\gcc\i686-w64-mingw32\7.3.0\include\winver.h"; DestDir: "{app}\data\lib\gcc\i686-w64-mingw32\7.3.0\include"; Flags: ignoreversion
-Source: "data\lib\gcc\i686-w64-mingw32\7.3.0\include\afxres.h"; DestDir: "{app}\data\lib\gcc\i686-w64-mingw32\7.3.0\include"; Flags: ignoreversion
+Source: "data\bin\mcpp.exe"; DestDir: "{app}\data\bin"; Flags: ignoreversion
+Source: "data\bin\dfmsc.exe"; DestDir: "{app}\data\bin"; Flags: ignoreversion
+Source: "EGA\EGA-Manual.pdf"; DestDir: "{app}\EGA"; Flags: ignoreversion
+Source: "EGA\samples\fact.ega"; DestDir: "{app}\EGA"; Flags: ignoreversion
+Source: "EGA\samples\input.ega"; DestDir: "{app}\EGA"; Flags: ignoreversion
+Source: "EGA\samples\plus.ega"; DestDir: "{app}\EGA"; Flags: ignoreversion
+Source: "EGA\samples\break.ega"; DestDir: "{app}\EGA"; Flags: ignoreversion
+Source: "EGA-samples\RES_clone_by_lang.ega"; DestDir: "{app}\EGA"; Flags: ignoreversion
+Source: "EGA-samples\RES_delete.ega"; DestDir: "{app}\EGA"; Flags: ignoreversion
+Source: "EGA-samples\RES_select.ega"; DestDir: "{app}\EGA"; Flags: ignoreversion
+Source: "EGA-samples\NeutralToEnglish.ega"; DestDir: "{app}\EGA"; Flags: ignoreversion
+Source: "EGA-samples\Censorship.ega"; DestDir: "{app}\EGA"; Flags: ignoreversion
+Source: "EGA-samples\RES_set_binary.ega"; DestDir: "{app}\EGA"; Flags: ignoreversion
+Source: "data\lib\gcc\i686-w64-mingw32\10.2.0\include\commctrl.h"; DestDir: "{app}\data\lib\gcc\i686-w64-mingw32\10.2.0\include"; Flags: ignoreversion
+Source: "data\lib\gcc\i686-w64-mingw32\10.2.0\include\dlgs.h"; DestDir: "{app}\data\lib\gcc\i686-w64-mingw32\10.2.0\include"; Flags: ignoreversion
+Source: "data\lib\gcc\i686-w64-mingw32\10.2.0\include\windef.h"; DestDir: "{app}\data\lib\gcc\i686-w64-mingw32\10.2.0\include"; Flags: ignoreversion
+Source: "data\lib\gcc\i686-w64-mingw32\10.2.0\include\windows.h"; DestDir: "{app}\data\lib\gcc\i686-w64-mingw32\10.2.0\include"; Flags: ignoreversion
+Source: "data\lib\gcc\i686-w64-mingw32\10.2.0\include\winnt.h"; DestDir: "{app}\data\lib\gcc\i686-w64-mingw32\10.2.0\include"; Flags: ignoreversion
+Source: "data\lib\gcc\i686-w64-mingw32\10.2.0\include\winresrc.h"; DestDir: "{app}\data\lib\gcc\i686-w64-mingw32\10.2.0\include"; Flags: ignoreversion
+Source: "data\lib\gcc\i686-w64-mingw32\10.2.0\include\winuser.h"; DestDir: "{app}\data\lib\gcc\i686-w64-mingw32\10.2.0\include"; Flags: ignoreversion
+Source: "data\lib\gcc\i686-w64-mingw32\10.2.0\include\winver.h"; DestDir: "{app}\data\lib\gcc\i686-w64-mingw32\10.2.0\include"; Flags: ignoreversion
+Source: "data\lib\gcc\i686-w64-mingw32\10.2.0\include\afxres.h"; DestDir: "{app}\data\lib\gcc\i686-w64-mingw32\10.2.0\include"; Flags: ignoreversion
 ; NOTE: Don't use "Flags: ignoreversion" on any shared system files
 
 [Icons]
@@ -167,216 +133,147 @@ Name: "{commondesktop}\RisohEditor"; Filename: "{app}\RisohEditor.exe"; Tasks: d
 [Run]
 Filename: "{app}\RisohEditor.exe"; Description: "{cm:LaunchProgram,RisohEditor}"; Flags: nowait postinstall skipifsilent
 
+[Registry]
+Root: HKCU; Subkey: "Software\Katayama Hirofumi MZ\RisohEditor"; Flags: deletekey uninsdeletekey
+; .rc
+Root: HKCR; Subkey: ".rc"; ValueType: string; ValueName: ""; ValueData: "RisohEditor.ResourceFile"; Flags: uninsdeletevalue; Tasks: "rc_association"
+Root: HKCR; Subkey: "RisohEditor.ResourceFile"; ValueType: string; ValueName: ""; ValueData: "RisohEditor Resource File"; Flags: uninsdeletekey; Tasks: "rc_association"
+Root: HKCR; Subkey: "RisohEditor.ResourceFile\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\RisohEditor.exe,0"; Tasks: "rc_association"
+Root: HKCR; Subkey: "RisohEditor.ResourceFile\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\RisohEditor.exe"" ""%1"""; Tasks: "rc_association"
+; .res
+Root: HKCR; Subkey: ".res"; ValueType: string; ValueName: ""; ValueData: "RisohEditor.BinaryResourceFile"; Flags: uninsdeletevalue; Tasks: "res_association"
+Root: HKCR; Subkey: "RisohEditor.BinaryResourceFile"; ValueType: string; ValueName: ""; ValueData: "RisohEditor Binary Resource File"; Flags: uninsdeletekey; Tasks: "res_association"
+Root: HKCR; Subkey: "RisohEditor.BinaryResourceFile\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\RisohEditor.exe,0"; Tasks: "res_association"
+Root: HKCR; Subkey: "RisohEditor.BinaryResourceFile\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\RisohEditor.exe"" ""%1"""; Tasks: "res_association"
+
 [CustomMessages]
-armenian.ReadmeEnglish=ReadMe (English)
-armenian.ReadmeJapanese=ReadMe (Japanese)
-armenian.LicenseEnglish=License (English)
-brazilianportuguese.ReadmeEnglish=ReadMe (English)
-brazilianportuguese.ReadmeJapanese=ReadMe (Japanese)
-brazilianportuguese.LicenseEnglish=License (English)
+brazilianportuguese.ReadmeEnglish=ReadMe (inglês)
+brazilianportuguese.ReadmeJapanese=ReadMe (japonês)
+brazilianportuguese.LicenseEnglish=Licença
+brazilianportuguese.AssociateRcFiles=Associar arquivos *.rc
+brazilianportuguese.AssociateResFiles=Associar arquivos *.res
 catalan.ReadmeEnglish=ReadMe (English)
 catalan.ReadmeJapanese=ReadMe (Japanese)
-catalan.LicenseEnglish=License (English)
+catalan.LicenseEnglish=License
+catalan.AssociateRcFiles=Associate *.rc files
+catalan.AssociateResFiles=Associate *.res files
 corsican.ReadmeEnglish=ReadMe (English)
 corsican.ReadmeJapanese=ReadMe (Japanese)
-corsican.LicenseEnglish=License (English)
-czech.ReadmeEnglish=ReadMe (English)
-czech.ReadmeJapanese=ReadMe (Japanese)
-czech.LicenseEnglish=License (English)
-danish.ReadmeEnglish=ReadMe (English)
-danish.ReadmeJapanese=ReadMe (Japanese)
-danish.LicenseEnglish=License (English)
-dutch.ReadmeEnglish=ReadMe (English)
-dutch.ReadmeJapanese=ReadMe (Japanese)
-dutch.LicenseEnglish=License (English)
+corsican.LicenseEnglish=License
+corsican.AssociateRcFiles=Associate *.rc files
+corsican.AssociateResFiles=Associate *.res files
+czech.ReadmeEnglish=ReadMe (anglicky)
+czech.ReadmeJapanese=ReadMe (japonština)
+czech.LicenseEnglish=Licence
+czech.AssociateRcFiles=Přidružit soubory *.rc
+czech.AssociateResFiles=Přiřadit soubory *.res
+danish.ReadmeEnglish=ReadMe (engelsk)
+danish.ReadmeJapanese=ReadMe (japansk)
+danish.LicenseEnglish=Licens
+danish.AssociateRcFiles=Associerede *.rc-filer
+danish.AssociateResFiles=Tilknyttede *.res-filer
+dutch.ReadmeEnglish=ReadMe (Engels)
+dutch.ReadmeJapanese=ReadMe (Japans)
+dutch.LicenseEnglish=Licentie
+dutch.AssociateRcFiles=Koppel *.rc-bestanden
+dutch.AssociateResFiles=Koppel *.res-bestanden
 english.ReadmeEnglish=ReadMe (English)
 english.ReadmeJapanese=ReadMe (Japanese)
-english.LicenseEnglish=License (English)
-finnish.ReadmeEnglish=ReadMe (English)
-finnish.ReadmeJapanese=ReadMe (Japanese)
-finnish.LicenseEnglish=License (English)
-french.ReadmeEnglish=ReadMe (English)
-french.ReadmeJapanese=ReadMe (Japanese)
-french.LicenseEnglish=License (English)
-german.ReadmeEnglish=ReadMe (English)
-german.ReadmeJapanese=ReadMe (Japanese)
-german.LicenseEnglish=License (English)
-greek.ReadmeEnglish=ReadMe (English)
-greek.ReadmeJapanese=ReadMe (Japanese)
-greek.LicenseEnglish=License (English)
-hebrew.ReadmeEnglish=ReadMe (English)
-hebrew.ReadmeJapanese=ReadMe (Japanese)
-hebrew.LicenseEnglish=License (English)
-hungarian.ReadmeEnglish=ReadMe (English)
-hungarian.ReadmeJapanese=ReadMe (Japanese)
-hungarian.LicenseEnglish=License (English)
+english.LicenseEnglish=License
+english.AssociateRcFiles=Associate *.rc files
+english.AssociateResFiles=Associate *.res files
+finnish.ReadmeEnglish=ReadMe (englanti)
+finnish.ReadmeJapanese=ReadMe (Japans)
+finnish.LicenseEnglish=Lisenssi
+finnish.AssociateRcFiles=Liitä *.rc-tiedostot
+finnish.AssociateResFiles=Liitä *.res-tiedostot
+french.ReadmeEnglish=ReadMe (anglais)
+french.ReadmeJapanese=ReadMe (japonais)
+french.LicenseEnglish=Licence
+french.AssociateRcFiles=Associer des fichiers *.rc
+french.AssociateResFiles=Associer des fichiers *.res
+german.ReadmeEnglish=ReadMe (Englisch)
+german.ReadmeJapanese=ReadMe (Japanisch)
+german.LicenseEnglish=Lizenz
+german.AssociateRcFiles=Verknüpfen Sie *.rc-Dateien
+german.AssociateResFiles=Verknüpfen Sie *.res-Dateien
+greek.ReadmeEnglish=ReadMe (Αγγλικά)
+greek.ReadmeJapanese=ReadMe (Ιαπωνικά)
+greek.LicenseEnglish=Αδεια
+greek.AssociateRcFiles=Συσχετίστε αρχεία *.rc
+greek.AssociateResFiles=Συσχετίστε αρχεία *.res
+hebrew.ReadmeEnglish=ReadMe (אנגלית)
+hebrew.ReadmeJapanese=ReadMe (יפנית)
+hebrew.LicenseEnglish=רישיון
+hebrew.AssociateRcFiles=לשייך קבצי *.rc
+hebrew.AssociateResFiles=שיוך קבצי *.res
+hungarian.ReadmeEnglish=ReadMe (angol)
+hungarian.ReadmeJapanese=ReadMe (japán)
+hungarian.LicenseEnglish=Engedély
+hungarian.AssociateRcFiles=*.rc fájlok társítása
+hungarian.AssociateResFiles=*.res fájlok társítása
 italian.ReadmeEnglish=Leggimi (Inglese)
 italian.ReadmeJapanese=Leggimi (Giapponese)
 italian.LicenseEnglish=Licenza (Inglese)
+italian.AssociateRcFiles=Associa file *.rc
+italian.AssociateResFiles=Associa file *.res
 japanese.ReadmeEnglish=ReadMe (英語)
 japanese.ReadmeJapanese=読んでね (日本語)
 japanese.LicenseEnglish=ライセンス (英語)
-norwegian.ReadmeEnglish=ReadMe (English)
-norwegian.ReadmeJapanese=ReadMe (Japanese)
-norwegian.LicenseEnglish=License (English)
-nepali.ReadmeEnglish=ReadMe (English)
-nepali.ReadmeJapanese=ReadMe (Japanese)
-nepali.LicenseEnglish=License (English)
-polish.ReadmeEnglish=ReadMe (English)
-polish.ReadmeJapanese=ReadMe (Japanese)
-polish.LicenseEnglish=License (English)
-portuguese.ReadmeEnglish=ReadMe (English)
-portuguese.ReadmeJapanese=ReadMe (Japanese)
-portuguese.LicenseEnglish=License (English)
-russian.ReadmeEnglish=ReadMe (English)
-russian.ReadmeJapanese=ReadMe (Japanese)
-russian.LicenseEnglish=License (English)
+japanese.AssociateRcFiles=*.rc ファイルを関連付ける
+japanese.AssociateResFiles=*.res ファイルを関連付ける
+norwegian.ReadmeEnglish=ReadMe (engelsk)
+norwegian.ReadmeJapanese=ReadMe (japansk)
+norwegian.LicenseEnglish=Tillatelse
+norwegian.AssociateRcFiles=Tilknytt *.rc-filer
+norwegian.AssociateResFiles=Tilknytt *.res-filer
+polish.ReadmeEnglish=ReadMe (angielski)
+polish.ReadmeJapanese=ReadMe (japoński)
+polish.LicenseEnglish=Licencja
+polish.AssociateRcFiles=Skojarz pliki *.rc
+polish.AssociateResFiles=Skojarz pliki *.res
+portuguese.ReadmeEnglish=ReadMe (inglês)
+portuguese.ReadmeJapanese=ReadMe (japonês)
+portuguese.LicenseEnglish=Licença
+portuguese.AssociateRcFiles=Associar arquivos *.rc
+portuguese.AssociateResFiles=Associar arquivos *.res
+russian.ReadmeEnglish=ReadMe (английский)
+russian.ReadmeJapanese=ReadMe (японский)
+russian.LicenseEnglish=Лицензия
+russian.AssociateRcFiles=Связать с файлами *.rc
+russian.AssociateResFiles=Связать с файлами *.res
 scottishgaelic.ReadmeEnglish=ReadMe (English)
 scottishgaelic.ReadmeJapanese=ReadMe (Japanese)
-scottishgaelic.LicenseEnglish=License (English)
+scottishgaelic.LicenseEnglish=License
+scottishgaelic.AssociateRcFiles=Associate *.rc files
+scottishgaelic.AssociateResFiles=Associate *.res files
 serbiancyrillic.ReadmeEnglish=ReadMe (English)
 serbiancyrillic.ReadmeJapanese=ReadMe (Japanese)
-serbiancyrillic.LicenseEnglish=License (English)
+serbiancyrillic.LicenseEnglish=License
+serbiancyrillic.AssociateRcFiles=Associate *.rc files
+serbiancyrillic.AssociateResFiles=Associate *.res files
 serbianlatin.ReadmeEnglish=ReadMe (English)
 serbianlatin.ReadmeJapanese=ReadMe (Japanese)
-serbianlatin.LicenseEnglish=License (English)
+serbianlatin.LicenseEnglish=License
+serbianlatin.AssociateRcFiles=Associate *.rc files
+serbianlatin.AssociateResFiles=Associate *.res files
 slovenian.ReadmeEnglish=ReadMe (English)
 slovenian.ReadmeJapanese=ReadMe (Japanese)
-slovenian.LicenseEnglish=License (English)
-spanish.ReadmeEnglish=ReadMe (English)
-spanish.ReadmeJapanese=ReadMe (Japanese)
-spanish.LicenseEnglish=License (English)
-turkish.ReadmeEnglish=ReadMe (English)
-turkish.ReadmeJapanese=ReadMe (Japanese)
-turkish.LicenseEnglish=License (English)
-ukrainian.ReadmeEnglish=ReadMe (English)
-ukrainian.ReadmeJapanese=ReadMe (Japanese)
-ukrainian.LicenseEnglish=License (English)
-
-;; Unofficial Languages
-;afrikaans.ReadmeEnglish=ReadMe (English)
-;afrikaans.ReadmeJapanese=ReadMe (Japanese)
-;afrikaans.LicenseEnglish=License (English)
-;albanian.ReadmeEnglish=ReadMe (English)
-;albanian.ReadmeJapanese=ReadMe (Japanese)
-;albanian.LicenseEnglish=License (English)
-;arabic.ReadmeEnglish=ReadMe (English)
-;arabic.ReadmeJapanese=ReadMe (Japanese)
-;arabic.LicenseEnglish=License (English)
-;asturian.ReadmeEnglish=ReadMe (English)
-;asturian.ReadmeJapanese=ReadMe (Japanese)
-;asturian.LicenseEnglish=License (English)
-;basque.ReadmeEnglish=ReadMe (English)
-;basque.ReadmeJapanese=ReadMe (Japanese)
-;basque.LicenseEnglish=License (English)
-;belarusian.ReadmeEnglish=ReadMe (English)
-;belarusian.ReadmeJapanese=ReadMe (Japanese)
-;belarusian.LicenseEnglish=License (English)
-;bengali.ReadmeEnglish=ReadMe (English)
-;bengali.ReadmeJapanese=ReadMe (Japanese)
-;bengali.LicenseEnglish=License (English)
-;bosnian.ReadmeEnglish=ReadMe (English)
-;bosnian.ReadmeJapanese=ReadMe (Japanese)
-;bosnian.LicenseEnglish=License (English)
-;bulgarian.ReadmeEnglish=ReadMe (English)
-;bulgarian.ReadmeJapanese=ReadMe (Japanese)
-;bulgarian.LicenseEnglish=License (English)
-;chinesesimplified.ReadmeEnglish=ReadMe (English)
-;chinesesimplified.ReadmeJapanese=ReadMe (Japanese)
-;chinesesimplified.LicenseEnglish=License (English)
-;chinesetraditional.ReadmeEnglish=ReadMe (English)
-;chinesetraditional.ReadmeJapanese=ReadMe (Japanese)
-;chinesetraditional.LicenseEnglish=License (English)
-;croatian.ReadmeEnglish=ReadMe (English)
-;croatian.ReadmeJapanese=ReadMe (Japanese)
-;croatian.LicenseEnglish=License (English)
-;englishbritish.ReadmeEnglish=ReadMe (English)
-;englishbritish.ReadmeJapanese=ReadMe (Japanese)
-;englishbritish.LicenseEnglish=License (English)
-;esperanto.ReadmeEnglish=ReadMe (English)
-;esperanto.ReadmeJapanese=ReadMe (Japanese)
-;esperanto.LicenseEnglish=License (English)
-;estonian.ReadmeEnglish=ReadMe (English)
-;estonian.ReadmeJapanese=ReadMe (Japanese)
-;estonian.LicenseEnglish=License (English)
-;farsi.ReadmeEnglish=ReadMe (English)
-;farsi.ReadmeJapanese=ReadMe (Japanese)
-;farsi.LicenseEnglish=License (English)
-;galician.ReadmeEnglish=ReadMe (English)
-;galician.ReadmeJapanese=ReadMe (Japanese)
-;galician.LicenseEnglish=License (English)
-;georgian.ReadmeEnglish=ReadMe (English)
-;georgian.ReadmeJapanese=ReadMe (Japanese)
-;georgian.LicenseEnglish=License (English)
-;hindi.ReadmeEnglish=ReadMe (English)
-;hindi.ReadmeJapanese=ReadMe (Japanese)
-;hindi.LicenseEnglish=License (English)
-;indonesian.ReadmeEnglish=ReadMe (English)
-;indonesian.ReadmeJapanese=ReadMe (Japanese)
-;indonesian.LicenseEnglish=License (English)
-;kazakh.ReadmeEnglish=ReadMe (English)
-;kazakh.ReadmeJapanese=ReadMe (Japanese)
-;kazakh.LicenseEnglish=License (English)
-;korean.ReadmeEnglish=ReadMe (English)
-;korean.ReadmeJapanese=ReadMe (Japanese)
-;korean.LicenseEnglish=License (English)
-;kurdish.ReadmeEnglish=ReadMe (English)
-;kurdish.ReadmeJapanese=ReadMe (Japanese)
-;kurdish.LicenseEnglish=License (English)
-;latvian.ReadmeEnglish=ReadMe (English)
-;latvian.ReadmeJapanese=ReadMe (Japanese)
-;latvian.LicenseEnglish=License (English)
-;ligurian.ReadmeEnglish=ReadMe (English)
-;ligurian.ReadmeJapanese=ReadMe (Japanese)
-;ligurian.LicenseEnglish=License (English)
-;lithuanian.ReadmeEnglish=ReadMe (English)
-;lithuanian.ReadmeJapanese=ReadMe (Japanese)
-;lithuanian.LicenseEnglish=License (English)
-;luxemburgish.ReadmeEnglish=ReadMe (English)
-;luxemburgish.ReadmeJapanese=ReadMe (Japanese)
-;luxemburgish.LicenseEnglish=License (English)
-;macedonian.ReadmeEnglish=ReadMe (English)
-;macedonian.ReadmeJapanese=ReadMe (Japanese)
-;macedonian.LicenseEnglish=License (English)
-;malaysian.ReadmeEnglish=ReadMe (English)
-;malaysian.ReadmeJapanese=ReadMe (Japanese)
-;malaysian.LicenseEnglish=License (English)
-;mongolian.ReadmeEnglish=ReadMe (English)
-;mongolian.ReadmeJapanese=ReadMe (Japanese)
-;mongolian.LicenseEnglish=License (English)
-;montenegrian.ReadmeEnglish=ReadMe (English)
-;montenegrian.ReadmeJapanese=ReadMe (Japanese)
-;montenegrian.LicenseEnglish=License (English)
-;norwegiannynorsk.ReadmeEnglish=ReadMe (English)
-;norwegiannynorsk.ReadmeJapanese=ReadMe (Japanese)
-;norwegiannynorsk.LicenseEnglish=License (English)
-;occitan.ReadmeEnglish=ReadMe (English)
-;occitan.ReadmeJapanese=ReadMe (Japanese)
-;occitan.LicenseEnglish=License (English)
-;romanian.ReadmeEnglish=ReadMe (English)
-;romanian.ReadmeJapanese=ReadMe (Japanese)
-;romanian.LicenseEnglish=License (English)
-;slovak.ReadmeEnglish=ReadMe (English)
-;slovak.ReadmeJapanese=ReadMe (Japanese)
-;slovak.LicenseEnglish=License (English)
-;swedish.ReadmeEnglish=ReadMe (English)
-;swedish.ReadmeJapanese=ReadMe (Japanese)
-;swedish.LicenseEnglish=License (English)
-;tatar.ReadmeEnglish=ReadMe (English)
-;tatar.ReadmeJapanese=ReadMe (Japanese)
-;tatar.LicenseEnglish=License (English)
-;thai.ReadmeEnglish=ReadMe (English)
-;thai.ReadmeJapanese=ReadMe (Japanese)
-;thai.LicenseEnglish=License (English)
-;uyghur.ReadmeEnglish=ReadMe (English)
-;uyghur.ReadmeJapanese=ReadMe (Japanese)
-;uyghur.LicenseEnglish=License (English)
-;uzbek.ReadmeEnglish=ReadMe (English)
-;uzbek.ReadmeJapanese=ReadMe (Japanese)
-;uzbek.LicenseEnglish=License (English)
-;valencian.ReadmeEnglish=ReadMe (English)
-;valencian.ReadmeJapanese=ReadMe (Japanese)
-;valencian.LicenseEnglish=License (English)
-;vietnamese.ReadmeEnglish=ReadMe (English)
-;vietnamese.ReadmeJapanese=ReadMe (Japanese)
-;vietnamese.LicenseEnglish=License (English)
+slovenian.LicenseEnglish=License
+slovenian.AssociateRcFiles=Associate *.rc files
+slovenian.AssociateResFiles=Associate *.res files
+spanish.ReadmeEnglish=ReadMe (inglés)
+spanish.ReadmeJapanese=Léame (japonés)
+spanish.LicenseEnglish=Licencia
+spanish.AssociateRcFiles=Asociar archivos *.rc
+spanish.AssociateResFiles=Asociar archivos *.res
+turkish.ReadmeEnglish=ReadMe (İngilizce)
+turkish.ReadmeJapanese=ReadMe (Japonca)
+turkish.LicenseEnglish=Lisans
+turkish.AssociateRcFiles=*.rc dosyalarını ilişkilendirin
+turkish.AssociateResFiles=*.res dosyalarını ilişkilendirin
+ukrainian.ReadmeEnglish=ReadMe (англійська)
+ukrainian.ReadmeJapanese=ReadMe (японська)
+ukrainian.LicenseEnglish=Ліцензія
+ukrainian.AssociateRcFiles=Пов’язати *.rc файли
+ukrainian.AssociateResFiles=Приєднати *.res файли

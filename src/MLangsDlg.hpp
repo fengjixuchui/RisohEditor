@@ -17,14 +17,14 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //////////////////////////////////////////////////////////////////////////////
 
-#ifndef MZC4_MLANGSDLG_HPP_
-#define MZC4_MLANGSDLG_HPP_
+#pragma once
 
 #include "MWindowBase.hpp"
 #include "MResizable.hpp"
 #include "RisohSettings.hpp"
 
 void InitLangListView(HWND hLst1, LPCTSTR pszText);
+MString GetLanguageStatement(WORD langid, BOOL bOldStyle);
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -61,6 +61,7 @@ public:
         m_resizable.SetLayoutAnchor(stc1, mzcLA_BOTTOM_LEFT);
         m_resizable.SetLayoutAnchor(cmb1, mzcLA_BOTTOM_LEFT, mzcLA_BOTTOM_RIGHT);
         m_resizable.SetLayoutAnchor(IDOK, mzcLA_BOTTOM_RIGHT);
+        m_resizable.SetLayoutAnchor(edt1, mzcLA_BOTTOM_LEFT, mzcLA_BOTTOM_RIGHT);
 
         SendMessageDx(WM_SETICON, ICON_BIG, (LPARAM)m_hIcon);
         SendMessageDx(WM_SETICON, ICON_SMALL, (LPARAM)m_hIconSm);
@@ -103,6 +104,21 @@ public:
         MString strText = GetWindowText(hCmb1);
 
         InitLangListView(m_hLst1, strText.c_str());
+    }
+
+    void OnLst1(HWND hwnd)
+    {
+        INT iItem = ListView_GetNextItem(m_hLst1, -1, LVNI_ALL | LVNI_SELECTED);
+        if (iItem < 0)
+            return;
+
+        TCHAR szText[32];
+        ListView_GetItemText(m_hLst1, iItem, 1, szText, _countof(szText));
+
+        LANGID langid = _wtoi(szText);
+        MString strStatement = GetLanguageStatement(langid, TRUE);
+
+        SetDlgItemText(hwnd, edt1, strStatement.c_str());
     }
 
     void OnCommand(HWND hwnd, int id, HWND hwndCtl, UINT codeNotify)
@@ -162,10 +178,21 @@ public:
     {
         if (pnmhdr->idFrom == lst1)
         {
-            if (pnmhdr->code == NM_DBLCLK)
+            switch (pnmhdr->code)
             {
+            case NM_DBLCLK:
                 OnCopy(hwnd);
                 return 1;
+            case LVN_ITEMCHANGED:
+                if (NM_LISTVIEW *pListView = (NM_LISTVIEW *)pnmhdr)
+                {
+                    if ((pListView->uChanged & LVIF_STATE) &&
+                        (pListView->uNewState & LVIS_SELECTED))
+                    {
+                        OnLst1(hwnd);
+                    }
+                }
+                break;
             }
         }
         return 0;
@@ -199,7 +226,3 @@ public:
         }
     }
 };
-
-//////////////////////////////////////////////////////////////////////////////
-
-#endif  // ndef MZC4_MLANGSDLG_HPP_

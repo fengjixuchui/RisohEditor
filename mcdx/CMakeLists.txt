@@ -4,7 +4,7 @@
 ##############################################################################
 
 # CMake minimum version
-cmake_minimum_required(VERSION 2.4)
+cmake_minimum_required(VERSION 2.9)
 
 # Enable C/C++
 ENABLE_LANGUAGE(C)
@@ -26,7 +26,7 @@ if (NOT WIN32)
 endif()
 
 # include directories
-include_directories(../include)
+include_directories(../src)
 
 # executable
 add_executable(mcdx mcdx.cpp getoptwin.c)

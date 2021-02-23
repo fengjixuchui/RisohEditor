@@ -17,14 +17,14 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //////////////////////////////////////////////////////////////////////////////
 
-#ifndef MZC4_MADDCURSORDLG_HPP_
-#define MZC4_MADDCURSORDLG_HPP_
+#pragma once
 
+#include "resource.h"
 #include "MWindowBase.hpp"
 #include "ConstantsDB.hpp"
 #include "Res.hpp"
 #include "MComboBoxAutoComplete.hpp"
-#include "resource.h"
+#include "MLangAutoComplete.hpp"
 
 void InitLangComboBox(HWND hCmb3, LANGID langid);
 BOOL CheckNameComboBox(HWND hCmb2, MIdOrString& name);
@@ -43,15 +43,23 @@ public:
     WORD m_lang;
     MComboBoxAutoComplete m_cmb2;
     MComboBoxAutoComplete m_cmb3;
+    MLangAutoComplete *m_pAutoComplete;
 
-    MAddCursorDlg() : MDialogBase(IDD_ADDCURSOR), m_file(NULL)
+    MAddCursorDlg()
+        : MDialogBase(IDD_ADDCURSOR)
+        , m_file(NULL)
+        , m_pAutoComplete(new MLangAutoComplete())
     {
+        m_pAutoComplete->AddRef();
         m_hCursor = NULL;
         m_cmb3.m_bAcceptSpace = TRUE;
     }
 
     ~MAddCursorDlg()
     {
+        m_pAutoComplete->unbind();
+        m_pAutoComplete->Release();
+        m_pAutoComplete = NULL;
         DestroyCursor(m_hCursor);
     }
 
@@ -75,6 +83,12 @@ public:
         HWND hCmb3 = GetDlgItem(hwnd, cmb3);
         InitLangComboBox(hCmb3, GetUserDefaultLangID());
         SubclassChildDx(m_cmb3, cmb3);
+
+        // auto complete
+        COMBOBOXINFO info = { sizeof(info) };
+        GetComboBoxInfo(m_cmb3, &info);
+        HWND hwndEdit = info.hwndItem;
+        m_pAutoComplete->bind(hwndEdit);
 
         CenterWindowDx();
 
@@ -103,7 +117,12 @@ public:
         std::wstring file;
         HWND hEdt1 = GetDlgItem(hwnd, edt1);
         if (!Edt1_CheckFile(hEdt1, file))
+        {
+            Edit_SetSel(hEdt1, 0, -1);  // select all
+            SetFocus(hEdt1);    // set focus
+            ErrorBoxDx(IDS_FILENOTFOUND);
             return;
+        }
 
         BOOL bAni = FALSE;
         size_t ich = file.find(L'.');
@@ -240,7 +259,3 @@ public:
         return 0;
     }
 };
-
-//////////////////////////////////////////////////////////////////////////////
-
-#endif  // ndef MZC4_MADDCURSORDLG_HPP_

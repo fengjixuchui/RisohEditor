@@ -17,13 +17,11 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //////////////////////////////////////////////////////////////////////////////
 
-#ifndef MZC4_MADDCTRLDLG_HPP_
-#define MZC4_MADDCTRLDLG_HPP_
+#pragma once
 
-#include "RisohEditor.hpp"
+#include "resource.h"
 #include "DialogRes.hpp"
 #include "MString.hpp"
-#include "resource.h"
 #include "MToolBarCtrl.hpp"
 #include "MComboBoxAutoComplete.hpp"
 #include "MCtrlDataDlg.hpp"
@@ -156,7 +154,7 @@ public:
 
         ConstantsDB::TableType table = g_db.GetTable(TEXT("CONTROLS.ICONS"));
         size_t count = table.size();
-        INT nCount = INT(count);
+        UINT nCount = UINT(count);
 
         m_vecControls.clear();
         if (m_himlControls)
@@ -170,7 +168,7 @@ public:
         m_hTB.SetImageList(m_himlControls);
 
         buttons.resize(nCount);
-        for (INT i = 0; i < nCount; ++i)
+        for (UINT i = 0; i < nCount; ++i)
         {
             buttons[i].iBitmap = i;
             buttons[i].idCommand = i + 1000;
@@ -206,7 +204,7 @@ public:
 
         HWND hCmb3 = GetDlgItem(hwnd, cmb3);
         InitCtrlIDComboBox(hCmb3);
-        if (g_settings.bHasIDC_STATIC)
+        if (g_settings.bUseIDC_STATIC)
             SetDlgItemText(hwnd, cmb3, TEXT("IDC_STATIC"));
         else
             SetDlgItemText(hwnd, cmb3, TEXT("-1"));
@@ -545,18 +543,8 @@ public:
             LPOLESTR pszCLSID = NULL;
             if (S_OK == StringFromCLSID(insert_object.clsid, &pszCLSID))
             {
-                if (GetDlgItemText(hwnd, cmb4).find(TEXT("AtlAxWin")) == 0)
-                {
-                    WCHAR szText[64];
-                    StringCchCopyW(szText, _countof(szText), L"CLSID:");
-                    StringCchCatW(szText, _countof(szText), pszCLSID);
-                    SetDlgItemTextW(hwnd, cmb2, szText);
-                }
-                else
-                {
-                    SetDlgItemTextW(hwnd, cmb2, pszCLSID);
-                }
-                SetDlgItemTextW(hwnd, cmb4, g_settings.strAtlAxWin.c_str());
+                SetDlgItemTextW(hwnd, cmb2, NULL);
+                SetDlgItemTextW(hwnd, cmb4, pszCLSID);
                 CoTaskMemFree(pszCLSID);
             }
         }
@@ -740,7 +728,3 @@ public:
         return DefaultProcDx();
     }
 };
-
-//////////////////////////////////////////////////////////////////////////////
-
-#endif  // ndef MZC4_MADDCTRLDLG_HPP_

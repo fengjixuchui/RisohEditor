@@ -17,16 +17,15 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //////////////////////////////////////////////////////////////////////////////
 
-#ifndef MZC4_MENCODINGDLG_HPP_
-#define MZC4_MENCODINGDLG_HPP_
+#pragma once
 
+#include "resource.h"
 #include "MWindowBase.hpp"
 #include "RisohSettings.hpp"
 #include "ConstantsDB.hpp"
 #include "Res.hpp"
 #include "MResizable.hpp"
 #include "MComboBoxAutoComplete.hpp"
-#include "resource.h"
 
 class MAddEncDlg;
 class MModifyEncDlg;
@@ -113,6 +112,8 @@ inline MStringW get_type_label(MIdOrString& type)
 
 //////////////////////////////////////////////////////////////////////////////
 
+void InitResTypeComboBox(HWND hCmb1, const MIdOrString& type);
+
 class MAddEncDlg : public MDialogBase
 {
 public:
@@ -129,19 +130,7 @@ public:
         SubclassChildDx(m_cmb1, cmb1);
 
         HWND hCmb1 = GetDlgItem(hwnd, cmb1);
-        auto table = g_db.GetTable(L"RESOURCE");
-        for (auto& table_entry : table)
-        {
-            WCHAR sz[MAX_PATH];
-            StringCchPrintfW(sz, _countof(sz), L"%s (%lu)",
-                             table_entry.name.c_str(), table_entry.value);
-            ComboBox_AddString(hCmb1, sz);
-        }
-        table = g_db.GetTable(L"RESOURCE.STRING.TYPE");
-        for (auto& table_entry : table)
-        {
-            ComboBox_AddString(hCmb1, table_entry.name.c_str());
-        }
+        InitResTypeComboBox(hCmb1, MIdOrString());
 
         HWND hCmb2 = GetDlgItem(hwnd, cmb2);
         ComboBox_AddString(hCmb2, LoadStringDx(IDS_ANSI));
@@ -229,32 +218,7 @@ public:
         SubclassChildDx(m_cmb1, cmb1);
 
         HWND hCmb1 = GetDlgItem(hwnd, cmb1);
-        auto table = g_db.GetTable(L"RESOURCE");
-        for (auto& table_entry : table)
-        {
-            WCHAR sz[MAX_PATH];
-            StringCchPrintfW(sz, _countof(sz), L"%s (%lu)",
-                             table_entry.name.c_str(), table_entry.value);
-            int k = ComboBox_AddString(hCmb1, sz);
-            if (table_entry.value == m_type.m_id)
-            {
-                ComboBox_SetCurSel(hCmb1, k);
-            }
-        }
-        table = g_db.GetTable(L"RESOURCE.STRING.TYPE");
-        for (auto& table_entry : table)
-        {
-            int k = ComboBox_AddString(hCmb1, table_entry.name.c_str());
-            if (table_entry.name == m_type.m_str)
-            {
-                ComboBox_SetCurSel(hCmb1, k);
-            }
-        }
-        if (ComboBox_GetCurSel(hCmb1) == CB_ERR)
-        {
-            int k = ComboBox_AddString(hCmb1, m_type.c_str());
-            ComboBox_SetCurSel(hCmb1, k);
-        }
+        InitResTypeComboBox(hCmb1, m_type);
         EnableWindow(hCmb1, FALSE);
 
         HWND hCmb2 = GetDlgItem(hwnd, cmb2);
@@ -520,6 +484,8 @@ public:
     void OnModify(HWND hwnd)
     {
         INT iItem = ListView_GetNextItem(m_hLst1, -1, LVNI_ALL | LVNI_SELECTED);
+        if (iItem == -1)
+            return;
 
         WCHAR szText1[64], szText2[64];
 
@@ -642,7 +608,3 @@ public:
         return DefaultProcDx();
     }
 };
-
-//////////////////////////////////////////////////////////////////////////////
-
-#endif  // ndef MZC4_MENCODINGDLG_HPP_

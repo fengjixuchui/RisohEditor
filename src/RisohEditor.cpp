@@ -1,7 +1,7 @@
 // RisohEditor.cpp --- RisohEditor
 //////////////////////////////////////////////////////////////////////////////
 // RisohEditor --- Another free Win32 resource editor
-// Copyright (C) 2017-2018 Katayama Hirofumi MZ <katayama.hirofumi.mz@gmail.com>
+// Copyright (C) 2017-2021 Katayama Hirofumi MZ <katayama.hirofumi.mz@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -18,16 +18,16 @@
 //////////////////////////////////////////////////////////////////////////////
 
 #include "RisohEditor.hpp"
+#include "MLangAutoComplete.hpp"
 
 //////////////////////////////////////////////////////////////////////////////
 // constants
 
 #define TV_WIDTH        250     // default m_hwndTV width
 #define BV_WIDTH        160     // default m_hBmpView width
-#define BE_HEIGHT       90      // default m_hBinEdit height
+#define BE_HEIGHT       90      // default m_hHexViewer height
 #define CX_STATUS_PART  80      // status bar part width
-
-#define MYWM_POSTSEARCH (WM_USER + 200)
+#define MYWM_UPDATELANGARROW (WM_USER + 114)
 
 MString GetLanguageStatement(WORD langid, BOOL bOldStyle);
 
@@ -37,6 +37,16 @@ static const DWORD s_nMaxCaptions = 10;
 // the maximum number of backup
 static const UINT s_nBackupMaxCount = 5;
 
+// contents modified?
+static BOOL s_bModified = FALSE;
+
+void DoSetFileModified(BOOL bModified)
+{
+    s_bModified = bModified;
+}
+
+static HWND s_hMainWnd = NULL;
+
 enum IMPORT_RESULT
 {
     IMPORTED,
@@ -44,6 +54,31 @@ enum IMPORT_RESULT
     IMPORT_FAILED,
     NOT_IMPORTABLE
 };
+
+WORD GetMachineOfBinary(LPCWSTR pszExeFile)
+{
+    WORD wMachine = IMAGE_FILE_MACHINE_UNKNOWN;
+    if (FILE *fp = _wfopen(pszExeFile, L"rb"))
+    {
+        SIZE_T ib = 0;
+        IMAGE_DOS_HEADER dos = { 0 };
+        fread(&dos, sizeof(dos), 1, fp);
+        if (dos.e_magic == IMAGE_DOS_SIGNATURE)
+        {
+            ib = dos.e_lfanew;
+        }
+        fseek(fp, ib, SEEK_SET);
+        IMAGE_NT_HEADERS nt = { 0 };
+        fread(&nt, sizeof(nt), 1, fp);
+        if (nt.Signature == IMAGE_NT_SIGNATURE)
+        {
+            auto& file = nt.FileHeader;
+            wMachine = file.Machine;
+        }
+        fclose(fp);
+    }
+    return wMachine;
+}
 
 //////////////////////////////////////////////////////////////////////////////
 // global variables
@@ -62,7 +97,7 @@ static SETWINDOWTHEME s_pSetWindowTheme = NULL;
 
 BOOL IsFileLockedDx(LPCTSTR pszFileName)
 {
-    if (GetFileAttributesW(pszFileName) == INVALID_FILE_ATTRIBUTES)
+    if (!PathFileExistsW(pszFileName))
         return FALSE;
 
     HANDLE hFile;
@@ -78,7 +113,7 @@ BOOL IsFileLockedDx(LPCTSTR pszFileName)
 }
 
 // "." or ".."
-#define IS_DOTS(psz) ((psz)[0] == '.' && ((psz)[1] == '\0' || (psz)[1] == '.' && (psz)[2] == '\0'))
+#define IS_DOTS(psz) ((psz)[0] == '.' && ((psz)[1] == '\0' || ((psz)[1] == '.' && (psz)[2] == '\0')))
 
 // delete a directory (a folder)
 BOOL DeleteDirectoryDx(LPCTSTR pszDir)
@@ -213,6 +248,7 @@ BOOL DumpBinaryFileDx(const WCHAR *filename, LPCVOID pv, DWORD size)
 
     int n = (int)fwrite(pv, size, 1, fp);   // write
 
+    fflush(fp);
     fclose(fp);     // close the files
 
     return n == 1;  // success or not
@@ -321,6 +357,9 @@ void GetStyleSelect(std::vector<BYTE>& sel,
     sel.resize(table.size());
     for (size_t i = 0; i < table.size(); ++i)
     {
+        if (table[i].name.find(L'|') != ConstantsDB::StringType::npos)
+            continue;
+
         if ((dwValue & table[i].mask) == table[i].value)
             sel[i] = TRUE;
         else
@@ -336,6 +375,9 @@ DWORD AnalyseStyleDiff(
     assert(old_sel.size() == new_sel.size());
     for (size_t i = 0; i < old_sel.size(); ++i)
     {
+        if (table[i].name.find(L'|') != ConstantsDB::StringType::npos)
+            continue;
+
         if (old_sel[i] && !new_sel[i])
         {
             dwValue &= ~table[i].mask;
@@ -357,8 +399,13 @@ void InitStyleListBox(HWND hLst, ConstantsDB::TableType& table)
 
     for (auto& table_entry : table)
     {
+        if (table_entry.name.find(L'|') != ConstantsDB::StringType::npos)
+            continue;
+
         ListBox_AddString(hLst, table_entry.name.c_str());
     }
+
+    ListBox_SetHorizontalExtent(hLst, 300);
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -383,6 +430,9 @@ EnumFontFamProc(ENUMLOGFONT *lpelf,
 // initialize the font combobox
 void InitFontComboBox(HWND hCmb)
 {
+    ComboBox_AddString(hCmb, L"MS Shell Dlg");
+    ComboBox_AddString(hCmb, L"MS Shell Dlg 2");
+
     HDC hDC = CreateCompatibleDC(NULL);
     EnumFontFamilies(hDC, NULL, (FONTENUMPROC)EnumFontFamProc, (LPARAM)hCmb);
     DeleteDC(hDC);
@@ -459,7 +509,7 @@ BYTE GetCharSetFromComboBox(HWND hCmb)
     if (i == CB_ERR)    // not selected
         return DEFAULT_CHARSET;     // return the default value
 
-    if (i < _countof(s_charset_entries))
+    if (i < INT(_countof(s_charset_entries)))
         return s_charset_entries[i].CharSet;    // return the charset value
 
     return DEFAULT_CHARSET;     // return the default value
@@ -684,7 +734,7 @@ MString GetAssoc(const MString& name)
         else
             name_or_id.m_str = name;
 
-        EntrySetBase found;
+        EntrySet found;
         g_res.search(found, ET_LANG, type, name_or_id);
 
         if (found.size() && g_db.IsEntityIDType(nIDTYPE_))
@@ -751,9 +801,58 @@ MString GetAssoc(const MString& name)
     return ret;
 }
 
+void InitComboBoxPlaceholder(HWND hCmb, UINT nStringID)
+{
+    HWND hEdit = (HWND)SendMessage(hCmb, CBEM_GETEDITCONTROL, 0, 0);
+    if (!hEdit)
+    {
+        hEdit = FindWindowEx(hCmb, NULL, TEXT("EDIT"), NULL);
+        if (!hEdit)
+        {
+            hCmb = FindWindowEx(hCmb, NULL, TEXT("COMBOBOX"), NULL);
+            hEdit = FindWindowEx(hCmb, NULL, TEXT("EDIT"), NULL);
+        }
+    }
+
+    if (hEdit)
+    {
+        SendMessage(hEdit, EM_SETCUEBANNER, 0, (LPARAM)LoadStringDx(nStringID));
+    }
+}
+
+void InitResTypeComboBox(HWND hCmb1, const MIdOrString& type)
+{
+    InitComboBoxPlaceholder(hCmb1, IDS_INTEGERORIDENTIFIER);
+
+    auto table = g_db.GetTable(L"RESOURCE");
+    for (auto& table_entry : table)
+    {
+        WCHAR sz[MAX_PATH];
+        StringCchPrintfW(sz, _countof(sz), L"%s (%lu)",
+                         table_entry.name.c_str(), table_entry.value);
+        INT k = ComboBox_AddString(hCmb1, sz);
+        if (type == WORD(table_entry.value))
+        {
+            ComboBox_SetCurSel(hCmb1, k);
+        }
+    }
+
+    table = g_db.GetTable(L"RESOURCE.STRING.TYPE");
+    for (auto& table_entry : table)
+    {
+        INT k = ComboBox_AddString(hCmb1, table_entry.name.c_str());
+        if (type == table_entry.name.c_str())
+        {
+            ComboBox_SetCurSel(hCmb1, k);
+        }
+    }
+}
+
 // initialize the resource name combobox
 void InitResNameComboBox(HWND hCmb, MIdOrString id, IDTYPE_ nIDTYPE_)
 {
+    InitComboBoxPlaceholder(hCmb, IDS_INTEGERORIDENTIFIER);
+
     // set the text of the ID
     SetWindowTextW(hCmb, id.c_str());
 
@@ -812,6 +911,8 @@ void InitResNameComboBox(HWND hCmb, MIdOrString id, IDTYPE_ nIDTYPE_)
 // initialize the resource name combobox
 void InitResNameComboBox(HWND hCmb, MIdOrString id, IDTYPE_ nIDTYPE_1, IDTYPE_ nIDTYPE_2)
 {
+    InitComboBoxPlaceholder(hCmb, IDS_INTEGERORIDENTIFIER);
+
     // set the ID text to combobox
     SetWindowTextW(hCmb, id.c_str());
 
@@ -918,6 +1019,27 @@ BOOL CheckCommand(MString strCommand)
     return g_db.HasResID(strCommand);   // is it resource ID name?
 }
 
+void InitConstantComboBox(HWND hCmb)
+{
+    auto table = g_db.GetWholeTable();
+
+    // add the resource IDs
+    for (auto& table_entry : table)
+    {
+        ComboBox_AddString(hCmb, table_entry.name.c_str());
+    }
+
+    for (auto& pair : g_settings.id_map)
+    {
+        MAnsiToWide wide(CP_ACP, pair.first.c_str());
+
+        if (ComboBox_FindStringExact(hCmb, -1, wide.c_str()) != CB_ERR)
+            continue;
+
+        ComboBox_AddString(hCmb, wide.c_str());
+    }
+}
+
 // initialize the resource string ID combobox
 void InitStringComboBox(HWND hCmb, MString strString)
 {
@@ -1015,9 +1137,24 @@ struct LANG_ENTRY
 };
 std::vector<LANG_ENTRY> g_langs;
 
+MLangAutoComplete::MLangAutoComplete()
+{
+    m_nCurrentElement = 0;
+    m_nRefCount = 0;
+    m_fBound = FALSE;
+    m_pAC = NULL;
+
+    for (auto& lang : g_langs)
+    {
+        push_back(lang.str);
+    }
+}
+
 // initialize the language combobox
 void InitLangComboBox(HWND hCmb3, LANGID langid)
 {
+    InitComboBoxPlaceholder(hCmb3, IDS_INTEGERORIDENTIFIER);
+
     // for all the elements of g_langs
     for (auto& entry : g_langs)
     {
@@ -1059,6 +1196,13 @@ void InitLangListView(HWND hLst1, LPCTSTR pszText)
     // delete all the items of listview
     ListView_DeleteAllItems(hLst1);
 
+    WCHAR szText[128];
+    if (pszText)
+    {
+        StringCbCopyW(szText, sizeof(szText), pszText);
+        CharUpperW(szText);
+    }
+
     WCHAR sz1[64], sz2[64];
     LV_ITEM item;
     INT iItem = 0;
@@ -1072,10 +1216,12 @@ void InitLangListView(HWND hLst1, LPCTSTR pszText)
         {
             // filtering by pszText
             MString str = sz1;
-            if (str.find(pszText) == MString::npos)
+            CharUpperW(&str[0]);
+            if (str.find(szText) == MString::npos)
             {
                 str = sz2;
-                if (str.find(pszText) == MString::npos)
+                CharUpperW(&str[0]);
+                if (str.find(szText) == MString::npos)
                     continue;
             }
         }
@@ -1160,32 +1306,9 @@ WORD LangFromText(LPWSTR pszLang)
         if (strLang[0] == 0)
             break;  // it's empty. invalid
 
-        // maybe en_US, or jp_JP etc.
-        if (INT nValue = g_db.GetValueI(L"LANGUAGES", strLang.c_str()))
-        {
-            lang = (WORD)nValue;    // found
-            break;
-        }
-
-        // maybe en-US, or jp-JP etc.
-        {
-            MStringW str = strLang;
-
-            // replace '-' with '_'
-            auto i = str.find(L'-');
-            if (i != MString::npos)
-                str[i] = L'_';
-
-            // maybe en_US, or jp_JP etc.
-            if (INT nValue = g_db.GetValueI(L"LANGUAGES", str.c_str()))
-            {
-                lang = (WORD)nValue;    // found
-                break;
-            }
-        }
-
         // is it American English?
-        if (lstrcmpiW(pszLang, L"English") == 0 ||
+        if (lstrcmpiW(pszLang, L"en") == 0 ||
+            lstrcmpiW(pszLang, L"English") == 0 ||
             lstrcmpiW(pszLang, L"America") == 0 ||
             lstrcmpiW(pszLang, L"American") == 0 ||
             lstrcmpiW(pszLang, L"United States") == 0 ||
@@ -1277,6 +1400,30 @@ WORD LangFromText(LPWSTR pszLang)
             // Spanish
             lang = MAKELANGID(LANG_SPANISH, SUBLANG_SPANISH);
             break;
+        }
+
+        // maybe en_US, or jp_JP etc.
+        if (INT nValue = g_db.GetValueI(L"LANGUAGES", strLang.c_str()))
+        {
+            lang = (WORD)nValue;    // found
+            break;
+        }
+
+        // maybe en-US, or jp-JP etc.
+        {
+            MStringW str = strLang;
+
+            // replace '-' with '_'
+            auto i = str.find(L'-');
+            if (i != MString::npos)
+                str[i] = L'_';
+
+            // maybe en_US, or jp_JP etc.
+            if (INT nValue = g_db.GetValueI(L"LANGUAGES", str.c_str()))
+            {
+                lang = (WORD)nValue;    // found
+                break;
+            }
         }
 
         // is it numeric?
@@ -1470,7 +1617,7 @@ TBBUTTON g_buttons0[] =
     { -1, 0, TBSTATE_ENABLED, BTNS_SEP, {0}, 0, 0 },
     { 0, ID_NEW, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, IDS_TOOL_NEW },
     { 1, ID_OPEN, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, IDS_TOOL_OPEN },
-    { 2, ID_SAVEAS, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, IDS_TOOL_SAVE },
+    { 2, ID_SAVE, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, IDS_TOOL_SAVE },
     { -1, 0, TBSTATE_ENABLED, BTNS_SEP, {0}, 0, 0 },
     { 3, ID_EXPAND_ALL, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, IDS_TOOL_EXPAND },
     { 4, ID_COLLAPSE_ALL, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, IDS_TOOL_COLLAPSE },
@@ -1481,7 +1628,7 @@ TBBUTTON g_buttons0[] =
     { 8, ID_CLONE, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, IDS_TOOL_CLONE },
     { -1, 0, TBSTATE_ENABLED, BTNS_SEP, {0}, 0, 0 },
     { 13, ID_IMPORT, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, IDS_TOOL_IMPORT },
-    { 14, ID_EXTRACTBANG, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, IDS_TOOL_EXTRACT },
+    { 14, ID_EXPORTRES, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, IDS_TOOL_EXPORT },
 };
 
 // buttons info #1
@@ -1491,7 +1638,7 @@ TBBUTTON g_buttons1[] =
     { -1, 0, TBSTATE_ENABLED, BTNS_SEP, {0}, 0, 0 },
     { 0, ID_NEW, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, IDS_TOOL_NEW },
     { 1, ID_OPEN, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, IDS_TOOL_OPEN },
-    { 2, ID_SAVEAS, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, IDS_TOOL_SAVE },
+    { 2, ID_SAVE, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, IDS_TOOL_SAVE },
     { -1, 0, TBSTATE_ENABLED, BTNS_SEP, {0}, 0, 0 },
     { 3, ID_EXPAND_ALL, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, IDS_TOOL_EXPAND },
     { 4, ID_COLLAPSE_ALL, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, IDS_TOOL_COLLAPSE },
@@ -1502,7 +1649,7 @@ TBBUTTON g_buttons1[] =
     { 8, ID_CLONE, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, IDS_TOOL_CLONE },
     { -1, 0, TBSTATE_ENABLED, BTNS_SEP, {0}, 0, 0 },
     { 13, ID_IMPORT, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, IDS_TOOL_IMPORT },
-    { 14, ID_EXTRACTBANG, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, IDS_TOOL_EXTRACT },
+    { 14, ID_EXPORTRES, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, IDS_TOOL_EXPORT },
 };
 
 // buttons info #2
@@ -1513,7 +1660,7 @@ TBBUTTON g_buttons2[] =
     { -1, 0, TBSTATE_ENABLED, BTNS_SEP, {0}, 0, 0 },
     { 0, ID_NEW, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, IDS_TOOL_NEW },
     { 1, ID_OPEN, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, IDS_TOOL_OPEN },
-    { 2, ID_SAVEAS, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, IDS_TOOL_SAVE },
+    { 2, ID_SAVE, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, IDS_TOOL_SAVE },
     { -1, 0, TBSTATE_ENABLED, BTNS_SEP, {0}, 0, 0 },
     { 3, ID_EXPAND_ALL, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, IDS_TOOL_EXPAND },
     { 4, ID_COLLAPSE_ALL, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, IDS_TOOL_COLLAPSE },
@@ -1524,7 +1671,7 @@ TBBUTTON g_buttons2[] =
     { 8, ID_CLONE, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, IDS_TOOL_CLONE },
     { -1, 0, TBSTATE_ENABLED, BTNS_SEP, {0}, 0, 0 },
     { 13, ID_IMPORT, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, IDS_TOOL_IMPORT },
-    { 14, ID_EXTRACTBANG, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, IDS_TOOL_EXTRACT },
+    { 14, ID_EXPORTRES, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, IDS_TOOL_EXPORT },
 };
 
 // buttons info #3
@@ -1532,7 +1679,7 @@ TBBUTTON g_buttons3[] =
 {
     { 0, ID_NEW, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, IDS_TOOL_NEW },
     { 1, ID_OPEN, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, IDS_TOOL_OPEN },
-    { 2, ID_SAVEAS, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, IDS_TOOL_SAVE },
+    { 2, ID_SAVE, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, IDS_TOOL_SAVE },
     { -1, 0, TBSTATE_ENABLED, BTNS_SEP, {0}, 0, 0 },
     { 3, ID_EXPAND_ALL, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, IDS_TOOL_EXPAND },
     { 4, ID_COLLAPSE_ALL, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, IDS_TOOL_COLLAPSE },
@@ -1543,7 +1690,7 @@ TBBUTTON g_buttons3[] =
     { 8, ID_CLONE, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, IDS_TOOL_CLONE },
     { -1, 0, TBSTATE_ENABLED, BTNS_SEP, {0}, 0, 0 },
     { 13, ID_IMPORT, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, IDS_TOOL_IMPORT },
-    { 14, ID_EXTRACTBANG, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, IDS_TOOL_EXTRACT },
+    { 14, ID_EXPORTRES, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, IDS_TOOL_EXPORT },
 };
 
 // buttons info #4
@@ -1553,7 +1700,7 @@ TBBUTTON g_buttons4[] =
     { -1, 0, TBSTATE_ENABLED, BTNS_SEP, {0}, 0, 0 },
     { 0, ID_NEW, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, IDS_TOOL_NEW },
     { 1, ID_OPEN, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, IDS_TOOL_OPEN },
-    { 2, ID_SAVEAS, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, IDS_TOOL_SAVE },
+    { 2, ID_SAVE, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, IDS_TOOL_SAVE },
     { -1, 0, TBSTATE_ENABLED, BTNS_SEP, {0}, 0, 0 },
     { 3, ID_EXPAND_ALL, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, IDS_TOOL_EXPAND },
     { 4, ID_COLLAPSE_ALL, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, IDS_TOOL_COLLAPSE },
@@ -1564,7 +1711,7 @@ TBBUTTON g_buttons4[] =
     { 8, ID_CLONE, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, IDS_TOOL_CLONE },
     { -1, 0, TBSTATE_ENABLED, BTNS_SEP, {0}, 0, 0 },
     { 13, ID_IMPORT, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, IDS_TOOL_IMPORT },
-    { 14, ID_EXTRACTBANG, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, IDS_TOOL_EXTRACT },
+    { 14, ID_EXPORTRES, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, IDS_TOOL_EXPORT },
 };
 
 // store the toolbar strings
@@ -1613,6 +1760,15 @@ BOOL CheckTypeComboBox(HWND hCmb1, MIdOrString& type)
     {
         // numeric type name
         type = WORD(mstr_parse_int(szType));
+        if (type == (WORD)0)
+        {
+            ComboBox_SetEditSel(hCmb1, 0, -1);  // select all
+            SetFocus(hCmb1);    // set focus
+            // show error message
+            MessageBoxW(GetParent(hCmb1), LoadStringDx(IDS_ENTERNONZEROTYPE),
+                        NULL, MB_ICONERROR);
+            return FALSE;   // failure
+        }
     }
     else
     {
@@ -1625,8 +1781,16 @@ BOOL CheckTypeComboBox(HWND hCmb1, MIdOrString& type)
         }
         else
         {
-            // a string type name
-            type = szType;
+            WORD nRT_ = (WORD)g_db.GetValue(L"RESOURCE", str);
+            if (nRT_ != 0)
+            {
+                type = nRT_;
+            }
+            else
+            {
+                // a string type name
+                type = szType;
+            }
         }
     }
 
@@ -1661,6 +1825,15 @@ BOOL CheckNameComboBox(HWND hCmb2, MIdOrString& name)
     {
         // a numeric name
         name = WORD(mstr_parse_int(szName));
+        if (name == (WORD)0)
+        {
+            ComboBox_SetEditSel(hCmb2, 0, -1);  // select all
+            SetFocus(hCmb2);    // set focus
+            // show error message
+            MessageBoxW(GetParent(hCmb2), LoadStringDx(IDS_ENTERNONZERONAME),
+                        NULL, MB_ICONERROR);
+            return FALSE;   // failure
+        }
     }
     else
     {
@@ -1686,15 +1859,8 @@ BOOL Edt1_CheckFile(HWND hEdt1, MStringW& file)
     mstr_trim(str);
     StringCchCopyW(szFile, _countof(szFile), str.c_str());
 
-    if (::GetFileAttributesW(szFile) == INVALID_FILE_ATTRIBUTES)    // not exists
-    {
-        Edit_SetSel(hEdt1, 0, -1);  // select all
-        SetFocus(hEdt1);    // set focus
-        // show error message
-        MessageBoxW(GetParent(hEdt1), LoadStringDx(IDS_FILENOTFOUND),
-                    NULL, MB_ICONERROR);
+    if (!PathFileExistsW(szFile))    // not exists
         return FALSE;   // failure
-    }
 
     // store
     file = szFile;
@@ -1917,10 +2083,15 @@ protected:
     // data and sub-programs
     WCHAR       m_szDataFolder[MAX_PATH];       // the data folder location
     WCHAR       m_szConstantsFile[MAX_PATH];    // the Constants.txt file location
-    WCHAR       m_szCppExe[MAX_PATH];           // the cpp.exe location
+    WCHAR       m_szMCppExe[MAX_PATH];          // the mcpp.exe location
     WCHAR       m_szWindresExe[MAX_PATH];       // the windres.exe location
     WCHAR       m_szUpxExe[MAX_PATH];           // the upx.exe location
     WCHAR       m_szMcdxExe[MAX_PATH];          // the mcdx.exe location
+    WCHAR       m_szDFMSC[MAX_PATH];            // the dfmsc.exe location
+    WCHAR       m_szTLB2IDL32[MAX_PATH];        // the TLB2IDL (32-bit) program location
+    WCHAR       m_szTLB2IDL64[MAX_PATH];        // the TLB2IDL (64-bit) program location
+    WCHAR       m_szIncludeDir[MAX_PATH];       // the include directory
+    INT         m_nStatusStringID;
 
     // file info
     FileType    m_file_type;
@@ -1929,6 +2100,7 @@ protected:
     BOOL        m_bUpxCompressed;               // is the real file compressed?
 
     BOOL UpdateFileInfo(FileType ft, LPCWSTR pszFile, BOOL bCompressed);
+    void UpdateTitleBar();
 
     // selection
     MIdOrString     m_type;
@@ -1937,21 +2109,22 @@ protected:
 
     // classes
     MRadWindow      m_rad_window;               // the RADical window
-    MEditCtrl       m_hBinEdit;                 // the EDIT control for binary
-    MSrcEdit        m_hSrcEdit;                 // the EDIT control for source
+    MEditCtrl       m_hHexViewer;               // the EDIT control for binary
+    MSrcEdit        m_hCodeEditor;              // the EDIT control for source
     MBmpView        m_hBmpView;                 // the bitmap view
     MSplitterWnd    m_splitter1;                // 1st splitter window
     MSplitterWnd    m_splitter2;                // 2nd splitter window
-    MSplitterWnd    m_splitter3;                // 3rd splitter window
     MIDListDlg      m_id_list_dlg;              // the ID List window
     ITEM_SEARCH     m_search;                   // the search options
+    MTabCtrl        m_tab;                      // the tab control
 
-    // find/replace
-    FINDREPLACE     m_fr;                       // the find/replace structure
-    TCHAR           m_szFindWhat[80];           // the source text for find/replace
-    TCHAR           m_szReplaceWith[80];        // the destination text for replace
+    // auto completion
+    MLangAutoCompleteEdit   m_auto_comp_edit;
+    MLangAutoComplete *     m_pAutoComplete;
 
 public:
+    MDropdownArrow  m_arrow;                    // the language drop-down arrow
+
     // constructor
     MMainWnd(int argc, TCHAR **targv, HINSTANCE hInst) :
         m_argc(argc), m_targv(targv), m_bLoading(FALSE),
@@ -1963,28 +2136,22 @@ public:
     {
         m_szDataFolder[0] = 0;
         m_szConstantsFile[0] = 0;
-        m_szCppExe[0] = 0;
+        m_szMCppExe[0] = 0;
         m_szWindresExe[0] = 0;
         m_szUpxExe[0] = 0;
         m_szMcdxExe[0] = 0;
+        m_szDFMSC[0] = 0;
+        m_szTLB2IDL32[0] = 0;
+        m_szTLB2IDL64[0] = 0;
+        m_szIncludeDir[0] = 0;
+        m_nStatusStringID = 0;
         m_szFile[0] = 0;
         m_szResourceH[0] = 0;
 
         m_bUpxCompressed = FALSE;
 
         m_lang = BAD_LANG;
-
-        ZeroMemory(&m_fr, sizeof(m_fr));
-        m_fr.lStructSize = sizeof(m_fr);
-        m_fr.Flags = FR_HIDEWHOLEWORD | FR_DOWN;
-
-        m_szFindWhat[0] = 0;
-        m_fr.lpstrFindWhat = m_szFindWhat;
-        m_fr.wFindWhatLen = _countof(m_szFindWhat);
-
-        m_szReplaceWith[0] = 0;
-        m_fr.lpstrReplaceWith = m_szReplaceWith;
-        m_fr.wReplaceWithLen = _countof(m_szReplaceWith);
+        m_pAutoComplete = NULL;
     }
 
     // settings
@@ -2037,14 +2204,23 @@ public:
     INT CheckData(VOID);
 
     void UpdateMenu();
-    void SelectTV(EntryBase *entry, BOOL bDoubleClick);
+
+    enum STV
+    {
+        STV_RESETTEXTANDMODIFIED,
+        STV_RESETTEXT,
+        STV_DONTRESET
+    };
+
+    void SelectTV(EntryBase *entry, BOOL bDoubleClick, STV stv = STV_RESETTEXTANDMODIFIED);
     void SelectTV(EntryType et, const MIdOrString& type,
-                  const MIdOrString& name, WORD lang, BOOL bDoubleClick);
+                  const MIdOrString& name, WORD lang,
+                  BOOL bDoubleClick, STV stv = STV_RESETTEXTANDMODIFIED);
 
     template <typename T_DIALOG>
-    void SelectTV(EntryType et, const T_DIALOG& dialog, BOOL bDoubleClick)
+    void SelectTV(EntryType et, const T_DIALOG& dialog, BOOL bDoubleClick, STV stv = STV_RESETTEXTANDMODIFIED)
     {
-        SelectTV(et, dialog.m_type, dialog.m_name, dialog.m_lang, FALSE);
+        SelectTV(et, dialog.m_type, dialog.m_name, dialog.m_lang, FALSE, stv);
     }
 
     BOOL CompileIfNecessary(BOOL bReopen = FALSE);
@@ -2066,14 +2242,20 @@ public:
 
     // show/hide
     void ShowIDList(HWND hwnd, BOOL bShow = TRUE);
-    void ShowMovie(BOOL bShow = TRUE);
-    void ShowBmpView(BOOL bShow = TRUE);
+
+    enum SHOW_MODE {
+        SHOW_MOVIE, SHOW_CODEONLY, SHOW_CODEANDBMP
+    };
+    SHOW_MODE m_nShowMode;
+    void SetShowMode(SHOW_MODE mode);
     void ShowStatusBar(BOOL bShow = TRUE);
-    void ShowBinEdit(BOOL bShow = TRUE, BOOL bShowError = FALSE);
+    BOOL ShowLangArrow(BOOL bShow, HTREEITEM hItem = NULL);
+    void UpdateLangArrow();
+    void PostUpdateLangArrow(HWND hwnd);
 
     // preview
-    VOID HidePreview();
-    BOOL Preview(HWND hwnd, const EntryBase *entry);
+    VOID HidePreview(STV stv = STV_RESETTEXTANDMODIFIED);
+    BOOL Preview(HWND hwnd, const EntryBase *entry, STV stv = STV_RESETTEXTANDMODIFIED);
 
     // actions
     BOOL DoLoadResH(HWND hwnd, LPCTSTR pszFile);
@@ -2082,17 +2264,22 @@ public:
     BOOL DoLoadRC(HWND hwnd, LPCWSTR szRCFile, EntrySet& res);
     BOOL DoExtract(const EntryBase *entry, BOOL bExporting);
     BOOL DoExport(LPCWSTR pszRCFile, LPWSTR pszResHFile = NULL);
+    BOOL DoExport(LPCWSTR pszRCFile, LPWSTR pszResHFile, const EntrySet& found);
     void DoIDStat(UINT anValues[5]);
     BOOL DoBackupFile(LPCWSTR pszFileName, UINT nCount = 0);
     BOOL DoBackupFolder(LPCWSTR pszFileName, UINT nCount = 0);
     BOOL DoWriteRC(LPCWSTR pszFileName, LPCWSTR pszResH);
-    BOOL DoWriteRCLang(MFile& file, ResToText& res2text, WORD lang);
+    BOOL DoWriteRC(LPCWSTR pszFileName, LPCWSTR pszResH, const EntrySet& found);
+    BOOL DoWriteRCLang(MFile& file, ResToText& res2text, WORD lang, const EntrySet& targets);
+    BOOL DoWriteRCLangUTF8(MFile& file, ResToText& res2text, WORD lang, const EntrySet& targets);
+    BOOL DoWriteRCLangUTF16(MFile& file, ResToText& res2text, WORD lang, const EntrySet& targets);
     BOOL DoWriteResH(LPCWSTR pszResH, LPCWSTR pszRCFile = NULL);
     BOOL DoWriteResHOfExe(LPCWSTR pszExeFile);
     BOOL DoSaveResAs(LPCWSTR pszExeFile);
     BOOL DoSaveAs(LPCWSTR pszExeFile);
     BOOL DoSaveAsCompression(LPCWSTR pszExeFile);
     BOOL DoSaveExeAs(LPCWSTR pszExeFile, BOOL bCompression = FALSE);
+    BOOL DoSaveInner(LPCWSTR pszExeFile, BOOL bCompression = FALSE);
     IMPORT_RESULT DoImport(HWND hwnd, LPCWSTR pszFile, LPCWSTR pchDotExt);
     IMPORT_RESULT DoImportRes(HWND hwnd, LPCWSTR pszFile);
     BOOL DoUpxTest(LPCWSTR pszUpx, LPCWSTR pszFile);
@@ -2102,10 +2289,23 @@ public:
     void DoRelangEntry(LPWSTR pszText, EntryBase *entry, WORD old_lang, WORD new_lang);
     void DoRefreshTV(HWND hwnd);
     void DoRefreshIDList(HWND hwnd);
+    void DoLangEditAutoComplete(HWND hwnd, HWND hwndEdit);
+    void DoLangEditAutoCompleteRelease(HWND hwnd);
 
     void ReCreateFonts(HWND hwnd);
     void ReSetPaths(HWND hwnd);
     BOOL DoItemSearch(ITEM_SEARCH& search);
+    BOOL DoItemSearchBang(HWND hwnd, MItemSearchDlg *pDialog);
+
+    EGA::arg_t DoEgaResSearch(const EGA::args_t& args);
+    EGA::arg_t DoEgaResDelete(const EGA::args_t& args);
+    EGA::arg_t DoEgaResCloneByName(const EGA::args_t& args);
+    EGA::arg_t DoEgaResCloneByLang(const EGA::args_t& args);
+    EGA::arg_t DoEgaResUnloadResH(const EGA::args_t& args);
+    EGA::arg_t DoEgaResSelect(const EGA::args_t& args);
+    EGA::arg_t DoEgaResGetBinary(const EGA::args_t& args);
+    EGA::arg_t DoEgaResSetBinary(const EGA::args_t& args);
+    EGA::arg_t DoEgaResConst(const EGA::args_t& args);
 
 protected:
     // parsing resource IDs
@@ -2113,6 +2313,8 @@ protected:
                       WORD lang, const MStringW& strWide, BOOL bReopen = FALSE);
     BOOL CompileStringTable(MStringA& strOutput, const MIdOrString& name, WORD lang, const MStringW& strWide);
     BOOL CompileMessageTable(MStringA& strOutput, const MIdOrString& name, WORD lang, const MStringW& strWide);
+    BOOL CompileRCData(MStringA& strOutput, const MIdOrString& name, WORD lang, const MStringW& strWide);
+    BOOL CompileTYPELIB(MStringA& strOutput, const MIdOrString& name, WORD lang, const MStringW& strWide);
     BOOL CheckResourceH(HWND hwnd, LPCTSTR pszPath);
     BOOL ParseResH(HWND hwnd, LPCTSTR pszFile, const char *psz, DWORD len);
     BOOL ParseMacros(HWND hwnd, LPCTSTR pszFile, const std::vector<MStringA>& macros, MStringA& str);
@@ -2120,6 +2322,7 @@ protected:
     void SetErrorMessage(const MStringA& strOutput, BOOL bBox = FALSE);
     MStringW GetMacroDump() const;
     MStringW GetIncludesDump() const;
+    MStringW GetIncludesDumpForWindres() const;
     void ReadResHLines(FILE *fp, std::vector<MStringA>& lines);
     void UpdateResHLines(std::vector<MStringA>& lines);
 
@@ -2153,12 +2356,15 @@ protected:
     void PreviewStringTable(HWND hwnd, const EntryBase& entry);
     void PreviewMessageTable(HWND hwnd, const EntryBase& entry);
     void PreviewRCData(HWND hwnd, const EntryBase& entry);
+    void PreviewTypeLib(HWND hwnd, const EntryBase& entry);
     void PreviewDlgInit(HWND hwnd, const EntryBase& entry);
     void PreviewUnknown(HWND hwnd, const EntryBase& entry);
 
     BOOL OnCreate(HWND hwnd, LPCREATESTRUCT lpCreateStruct);
     void OnActivate(HWND hwnd, UINT state, HWND hwndActDeact, BOOL fMinimized);
     void OnSysColorChange(HWND hwnd);
+    void OnSetFocus(HWND hwnd, HWND hwndOldFocus);
+    void OnKillFocus(HWND hwnd, HWND hwndNewFocus);
     void OnPlay(HWND hwnd);
     void OnDropFiles(HWND hwnd, HDROP hdrop);
     void OnMove(HWND hwnd, int x, int y);
@@ -2167,8 +2373,10 @@ protected:
     void OnContextMenu(HWND hwnd, HWND hwndContext, UINT xPos, UINT yPos);
     void OnCommand(HWND hwnd, int id, HWND hwndCtl, UINT codeNotify);
     LRESULT OnNotify(HWND hwnd, int idFrom, NMHDR *pnmhdr);
+    void OnClose(HWND hwnd);
     void OnDestroy(HWND hwnd);
 
+    void OnSelChange(HWND hwnd, INT iSelected);
     void OnCancelEdit(HWND hwnd);
     void OnCompile(HWND hwnd);
     void OnGuiEdit(HWND hwnd);
@@ -2176,7 +2384,6 @@ protected:
     void OnCopyAsNewName(HWND hwnd);
     void OnCopyAsNewLang(HWND hwnd);
     void OnItemSearch(HWND hwnd);
-    void OnItemSearchBang(HWND hwnd, MItemSearchDlg *pDialog);
     void OnExpandAll(HWND hwnd);
     void OnCollapseAll(HWND hwnd);
     void Expand(HTREEITEM hItem);
@@ -2187,8 +2394,11 @@ protected:
     void OnClone(HWND hwnd);
     void OnAddBang(HWND hwnd, NMTOOLBAR *pToolBar);
     void OnExtractBang(HWND hwnd);
-    void OnJumpToMatome(HWND hwnd);
+    void OnGuide(HWND hwnd);
     void OnEncoding(HWND hwnd);
+    void OnQueryConstant(HWND hwnd);
+    void OnUseBeginEnd(HWND hwnd);
+    void OnRefreshAll(HWND hwnd);
 
     LRESULT OnCompileCheck(HWND hwnd, WPARAM wParam, LPARAM lParam);
     LRESULT OnMoveSizeReport(HWND hwnd, WPARAM wParam, LPARAM lParam);
@@ -2198,7 +2408,14 @@ protected:
     LRESULT OnIDJumpBang(HWND hwnd, WPARAM wParam, LPARAM lParam);
     LRESULT OnRadSelChange(HWND hwnd, WPARAM wParam, LPARAM lParam);
     LRESULT OnUpdateDlgRes(HWND hwnd, WPARAM wParam, LPARAM lParam);
+    LRESULT OnGetHeadLines(HWND hwnd, WPARAM wParam, LPARAM lParam);
+    LRESULT OnDelphiDFMB2T(HWND hwnd, WPARAM wParam, LPARAM lParam);
+    LRESULT OnTLB2IDL(HWND hwnd, WPARAM wParam, LPARAM lParam);
     void OnIDJumpBang2(HWND hwnd, const MString& name, MString& strType);
+    LRESULT OnItemSearchBang(HWND hwnd, WPARAM wParam, LPARAM lParam);
+    LRESULT OnComplement(HWND hwnd, WPARAM wParam, LPARAM lParam);
+    BOOL DoInnerSearch(HWND hwnd);
+    LRESULT OnUpdateLangArrow(HWND hwnd, WPARAM wParam, LPARAM lParam);
 
     void OnAddBitmap(HWND hwnd);
     void OnAddCursor(HWND hwnd);
@@ -2214,6 +2431,13 @@ protected:
     void OnAddAccel(HWND hwnd);
     void OnDeleteRes(HWND hwnd);
     void OnExtractBin(HWND hwnd);
+    void OnExportRes(HWND hwnd);
+    void OnCheckUpdate(HWND hwnd);
+    void OnDfmSettings(HWND hwnd);
+
+    void OnExtractRC(HWND hwnd);
+    void OnExtractDFM(HWND hwnd);
+    void OnExtractTLB(HWND hwnd);
     void OnExtractBitmap(HWND hwnd);
     void OnExtractCursor(HWND hwnd);
     void OnExtractIcon(HWND hwnd);
@@ -2223,9 +2447,14 @@ protected:
     void OnReplaceIcon(HWND hwnd);
     void OnUpdateResHBang(HWND hwnd);
 
+    BOOL DoQuerySaveChange(HWND hwnd);
+
     void OnNew(HWND hwnd);
     void OnOpen(HWND hwnd);
-    void OnSaveAs(HWND hwnd);
+    BOOL OnSave(HWND hwnd);
+    BOOL OnSaveAs(HWND hwnd);
+    void OnEga(HWND hwnd);
+    void OnEgaProgram(HWND hwnd);
     void OnImport(HWND hwnd);
     void OnLoadResH(HWND hwnd);
     void OnLoadResHBang(HWND hwnd);
@@ -2235,7 +2464,10 @@ protected:
     void OnAbout(HWND hwnd);
     void OnConfig(HWND hwnd);
     void OnOpenReadMe(HWND hwnd);
+    void OnOpenReadMeIt(HWND hwnd);
     void OnOpenReadMeJp(HWND hwnd);
+    void OnOpenReadMeKo(HWND hwnd);
+    void OnOpenEgaManual(HWND hwnd);
     void OnOpenLicense(HWND hwnd);
     void OnOpenHyojunka(HWND hwnd);
     void OnDebugTreeNode(HWND hwnd);
@@ -2244,16 +2476,14 @@ protected:
     void OnHideIDMacros(HWND hwnd);
     void OnUseIDC_STATIC(HWND hwnd);
     void OnTest(HWND hwnd);
+    void OnReplaceDialogFonts(HWND hwnd);
+    void OnHelp(HWND hwnd);
+    void OnNextPane(HWND hwnd, BOOL bNext);
 
     // find/replace
     void OnFind(HWND hwnd);
     BOOL OnFindNext(HWND hwnd);
     BOOL OnFindPrev(HWND hwnd);
-    BOOL OnReplaceNext(HWND hwnd);
-    BOOL OnReplacePrev(HWND hwnd);
-    BOOL OnReplace(HWND hwnd);
-    BOOL OnReplaceAll(HWND hwnd);
-    LRESULT OnFindMsg(HWND hwnd, WPARAM wParam, LPARAM lParam);
 
 protected:
     MString GetLanguageStatement(WORD langid)
@@ -2261,9 +2491,12 @@ protected:
         return ::GetLanguageStatement(langid, TRUE) + L"\r\n";
     }
 
-    void UpdateNames(void);
+    void UpdateNames(BOOL bModified = TRUE);
     void UpdateEntryName(EntryBase *e, LPWSTR pszText = NULL);
     void UpdateEntryLang(EntryBase *e, LPWSTR pszText = NULL);
+
+    std::wstring GetRisohEditorVersion() const;
+    std::wstring ParseVersionFile(LPCWSTR pszFile, std::wstring& url) const;
 };
 
 //////////////////////////////////////////////////////////////////////////////
@@ -2275,8 +2508,19 @@ void MMainWnd::OnSysColorChange(HWND hwnd)
     // notify the main window children
     m_splitter1.SendMessageDx(WM_SYSCOLORCHANGE);
     m_splitter2.SendMessageDx(WM_SYSCOLORCHANGE);
-    m_splitter3.SendMessageDx(WM_SYSCOLORCHANGE);
     m_rad_window.SendMessageDx(WM_SYSCOLORCHANGE);
+}
+
+// WM_SETFOCUS
+void MMainWnd::OnSetFocus(HWND hwnd, HWND hwndOldFocus)
+{
+    m_arrow.ShowDropDownList(m_arrow, FALSE);
+}
+
+// WM_KILLFOCUS
+void MMainWnd::OnKillFocus(HWND hwnd, HWND hwndNewFocus)
+{
+    m_arrow.ShowDropDownList(m_arrow, FALSE);
 }
 
 // check whether it needs compilation
@@ -2310,6 +2554,8 @@ LRESULT MMainWnd::OnMoveSizeReport(HWND hwnd, WPARAM wParam, LPARAM lParam)
 
     // set the text to status bar
     ChangeStatusText(LoadStringPrintfDx(IDS_COORD, x, y, cx, cy));
+
+    DoSetFileModified(TRUE);
     return 0;
 }
 
@@ -2380,8 +2626,251 @@ void MMainWnd::UpdateMenu()
     }
 }
 
-// extract the binary as a file
-void MMainWnd::OnExtractBin(HWND hwnd)
+void MMainWnd::OnExtractDFM(HWND hwnd)
+{
+    // compile if necessary
+    if (!CompileIfNecessary(FALSE))
+        return;
+
+    // get the selected language entry
+    auto entry = g_res.get_lang_entry();
+    if (!entry)
+        return;
+
+    WCHAR szFile[MAX_PATH] = L"";
+    ResToText res2text;
+    MString strFile = res2text.GetEntryFileName(*entry);
+    if (strFile.size())
+    {
+        StringCbCopyW(szFile, sizeof(szFile), strFile.c_str());
+    }
+
+    // initialize OPENFILENAME structure
+    OPENFILENAMEW ofn = { OPENFILENAME_SIZE_VERSION_400W, hwnd };
+    ofn.lpstrFilter = MakeFilterDx(LoadStringDx(IDS_DFMFILTER));
+    ofn.lpstrFile = szFile;
+    ofn.nMaxFile = _countof(szFile);
+    ofn.lpstrTitle = LoadStringDx(IDS_EXTRACTDFM);
+    ofn.Flags = OFN_ENABLESIZING | OFN_EXPLORER | OFN_HIDEREADONLY |
+                OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT;
+    ofn.lpstrDefExt = L"dfm";
+
+    // let the user choose the path
+    if (GetSaveFileNameW(&ofn))
+    {
+        if (lstrcmpiW(PathFindExtensionW(szFile), L".txt") == 0)
+        {
+            auto ansi = dfm_text_from_binary(m_szDFMSC, entry->ptr(), entry->size(),
+                                             g_settings.nDfmCodePage, g_settings.bDfmRawTextComments);
+            if (FILE *fp = _wfopen(szFile, L"wb"))
+            {
+                fwrite(ansi.c_str(), ansi.size(), 1, fp);
+                fflush(fp);
+                fclose(fp);
+            }
+            else
+            {
+                ErrorBoxDx(IDS_CANTEXTRACTDFM);
+            }
+        }
+        else
+        {
+            if (!g_res.extract_bin(ofn.lpstrFile, entry))
+            {
+                ErrorBoxDx(IDS_CANTEXTRACTDFM);
+            }
+        }
+    }
+}
+
+void MMainWnd::OnExtractTLB(HWND hwnd)
+{
+    // compile if necessary
+    if (!CompileIfNecessary(FALSE))
+        return;
+
+    // get the selected language entry
+    auto entry = g_res.get_lang_entry();
+    if (!entry)
+        return;
+
+    WCHAR szFile[MAX_PATH] = L"";
+    ResToText res2text;
+    MString strFile = res2text.GetEntryFileName(*entry);
+    if (strFile.size())
+    {
+        StringCbCopyW(szFile, sizeof(szFile), strFile.c_str());
+    }
+
+    // initialize OPENFILENAME structure
+    OPENFILENAMEW ofn = { OPENFILENAME_SIZE_VERSION_400W, hwnd };
+    ofn.lpstrFilter = MakeFilterDx(LoadStringDx(IDS_TLBRESBINFILTER));
+    ofn.lpstrFile = szFile;
+    ofn.nMaxFile = _countof(szFile);
+    ofn.lpstrTitle = LoadStringDx(IDS_EXTRACTTLB);
+    ofn.Flags = OFN_ENABLESIZING | OFN_EXPLORER | OFN_HIDEREADONLY |
+                OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT;
+    ofn.lpstrDefExt = L"tlb";
+
+    // let the user choose the path
+    if (!GetSaveFileNameW(&ofn))
+        return;
+
+    auto dotext = PathFindExtensionW(szFile);
+    if (lstrcmpiW(dotext, L".txt") == 0 || lstrcmpiW(dotext, L".idl") == 0)
+    {
+        std::string ansi;
+        if (GetMachineOfBinary(m_szFile) == IMAGE_FILE_MACHINE_AMD64)
+            ansi = tlb_text_from_binary(m_szTLB2IDL64, entry->ptr(), entry->size());
+        else
+            ansi = tlb_text_from_binary(m_szTLB2IDL32, entry->ptr(), entry->size());
+        if (FILE *fp = _wfopen(szFile, L"wb"))
+        {
+            fwrite(ansi.c_str(), ansi.size(), 1, fp);
+            fflush(fp);
+            fclose(fp);
+        }
+        else
+        {
+            ErrorBoxDx(IDS_CANTEXTRACTTLB);
+        }
+    }
+    else
+    {
+        if (!g_res.extract_bin(ofn.lpstrFile, entry))
+        {
+            ErrorBoxDx(IDS_CANTEXTRACTTLB);
+        }
+    }
+}
+
+std::wstring MMainWnd::ParseVersionFile(LPCWSTR pszFile, std::wstring& url) const
+{
+    std::wstring ret;
+    char buf[256];
+    if (FILE *fp = _wfopen(pszFile, L"rb"))
+    {
+        while (fgets(buf, 256, fp))
+        {
+            std::string str = buf;
+            mstr_trim(str, " \t\r\n");
+            if (str.find("VERSION:") == 0)
+            {
+                str = str.substr(8);
+                mstr_trim(str, " \t\r\n");
+                MAnsiToWide a2w(CP_ACP, str.c_str());
+                ret = a2w.c_str();
+            }
+            else if (str.find("URL:") == 0)
+            {
+                str = str.substr(4);
+                mstr_trim(str, " \t\r\n");
+                MAnsiToWide a2w(CP_ACP, str.c_str());
+                url = a2w.c_str();
+            }
+        }
+
+        fclose(fp);
+    }
+    return ret;
+}
+
+std::wstring MMainWnd::GetRisohEditorVersion() const
+{
+    WCHAR szFile[MAX_PATH];
+    GetModuleFileNameW(NULL, szFile, _countof(szFile));
+
+    DWORD dwHandle;
+    DWORD dwSize = GetFileVersionInfoSizeW(szFile, &dwHandle);
+    if (!dwSize)
+    {
+        assert(0);
+        return L"";
+    }
+
+    std::vector<BYTE> data;
+    data.resize(dwSize);
+    if (!GetFileVersionInfoW(szFile, dwHandle, dwSize, &data[0]))
+    {
+        assert(0);
+        return L"";
+    }
+
+    LPVOID pValue;
+    UINT uLen;
+
+    if (!VerQueryValueW(&data[0], L"\\VarFileInfo\\Translation",
+                        &pValue, &uLen))
+    {
+        assert(0);
+        return L"";
+    }
+
+    WCHAR szValue[16];
+    DWORD dwValue = *(LPDWORD)pValue;
+    StringCbPrintfW(szValue, sizeof(szValue), L"%04X%04X", LOWORD(dwValue), HIWORD(dwValue));
+
+    std::wstring key = L"\\StringFileInfo\\";
+    key += szValue;
+    key += L"\\ProductVersion";
+    if (!VerQueryValueW(&data[0], key.c_str(), &pValue, &uLen))
+    {
+        assert(0);
+        return L"";
+    }
+
+    std::wstring ret = (LPWSTR)pValue;
+    return ret;
+}
+
+void MMainWnd::OnCheckUpdate(HWND hwnd)
+{
+    std::wstring local_version = GetRisohEditorVersion();
+    if (local_version.empty())
+    {
+        ErrorBoxDx(IDS_CANTCHECKUPDATE);
+        return;
+    }
+
+    WCHAR szPath[MAX_PATH], szFile[MAX_PATH];
+    GetTempPathW(_countof(szPath), szPath);
+    GetTempFileNameW(szPath, L"Upd", 0, szFile);
+
+    std::wstring page = L"https://katahiromz.web.fc2.com/re/version.html";
+    DeleteUrlCacheEntryW(page.c_str());
+    HRESULT hr = URLDownloadToFileW(NULL, page.c_str(), szFile, 0, NULL);
+    if (FAILED(hr))
+    {
+        ErrorBoxDx(IDS_CANTCHECKUPDATE);
+        return;
+    }
+
+    std::wstring url;
+    std::wstring remote_version = ParseVersionFile(szFile, url);
+    DeleteFileW(szFile);
+    if (remote_version.empty() || url.empty())
+    {
+        ErrorBoxDx(IDS_CANTCHECKUPDATE);
+        return;
+    }
+
+    WCHAR szText[256];
+    if (local_version < remote_version)
+    {
+        StringCbPrintfW(szText, sizeof(szText), LoadStringDx(IDS_THEREISUPDATE),
+                        remote_version.c_str());
+        if (MsgBoxDx(szText, MB_ICONINFORMATION | MB_YESNOCANCEL) == IDYES)
+        {
+            ShellExecuteW(hwnd, NULL, url.c_str(), NULL, NULL, SW_SHOWNORMAL);
+        }
+    }
+    else
+    {
+        MsgBoxDx(IDS_NOUPDATE, MB_ICONINFORMATION);
+    }
+}
+
+void MMainWnd::OnExportRes(HWND hwnd)
 {
     // compile if necessary
     if (!CompileIfNecessary(TRUE))
@@ -2392,42 +2881,15 @@ void MMainWnd::OnExtractBin(HWND hwnd)
     if (!e)
         return;     // not selected
 
-    WCHAR szFile[MAX_PATH] = L"";
+    if (e->is_delphi_dfm())
+        return OnExtractDFM(hwnd);
 
     // initialize OPENFILENAME structure
-    OPENFILENAMEW ofn;
-    ZeroMemory(&ofn, sizeof(ofn));
-    ofn.lStructSize = OPENFILENAME_SIZE_VERSION_400W;
-    ofn.hwndOwner = hwnd;
-
-    // use the prefered filter by the entry
-    if (e->m_et == ET_STRING || e->m_et == ET_MESSAGE)
-        ofn.lpstrFilter = MakeFilterDx(LoadStringDx(IDS_RESFILTER));
-
-    if (e->m_et == ET_LANG)
-    {
-        if (e->m_type == L"PNG")
-            ofn.lpstrFilter = MakeFilterDx(LoadStringDx(IDS_PNGRESBINFILTER));
-        else if (e->m_type == L"JPEG")
-            ofn.lpstrFilter = MakeFilterDx(LoadStringDx(IDS_JPEGRESBINFILTER));
-        else if (e->m_type == L"GIF")
-            ofn.lpstrFilter = MakeFilterDx(LoadStringDx(IDS_GIFRESBINFILTER));
-        else if (e->m_type == L"TIFF")
-            ofn.lpstrFilter = MakeFilterDx(LoadStringDx(IDS_TIFFRESBINFILTER));
-        else if (e->m_type == L"AVI")
-            ofn.lpstrFilter = MakeFilterDx(LoadStringDx(IDS_AVIRESBINFILTER));
-        else if (e->m_type == L"WAVE")
-            ofn.lpstrFilter = MakeFilterDx(LoadStringDx(IDS_WAVERESBINFILTER));
-        else
-            ofn.lpstrFilter = MakeFilterDx(LoadStringDx(IDS_RESBINFILTER));
-    }
-    else
-    {
-        ofn.lpstrFilter = MakeFilterDx(LoadStringDx(IDS_RESFILTER));
-    }
-
+    WCHAR szFile[MAX_PATH] = L"";
+    OPENFILENAMEW ofn = { OPENFILENAME_SIZE_VERSION_400W, hwnd };
     ofn.lpstrFile = szFile;
     ofn.nMaxFile = _countof(szFile);
+    ofn.lpstrFilter = MakeFilterDx(LoadStringDx(IDS_RESFILTER));
     ofn.lpstrTitle = LoadStringDx(IDS_EXTRACTRES);
     ofn.Flags = OFN_ENABLESIZING | OFN_EXPLORER | OFN_HIDEREADONLY |
                 OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT;
@@ -2456,6 +2918,190 @@ void MMainWnd::OnExtractBin(HWND hwnd)
     }
 }
 
+// extract the binary as a file
+void MMainWnd::OnExtractBin(HWND hwnd)
+{
+    // compile if necessary
+    if (!CompileIfNecessary(TRUE))
+        return;
+
+    // get the selected entry
+    auto e = g_res.get_entry();
+    if (!e)
+        return;     // not selected
+
+    if (e->is_delphi_dfm())
+        return OnExtractDFM(hwnd);
+
+    if (e->m_type == L"TYPELIB")
+        return OnExtractTLB(hwnd);
+
+    // initialize OPENFILENAME structure
+    WCHAR szFile[MAX_PATH] = L"";
+    OPENFILENAMEW ofn = { OPENFILENAME_SIZE_VERSION_400W, hwnd };
+    ofn.lpstrFile = szFile;
+    ofn.nMaxFile = _countof(szFile);
+
+    // use the prefered filter by the entry
+    switch (e->m_et)
+    {
+    case ET_STRING:
+    case ET_MESSAGE:
+    case ET_TYPE:
+    case ET_NAME:
+        ofn.lpstrFilter = MakeFilterDx(LoadStringDx(IDS_RESFILTER));
+        ofn.lpstrDefExt = L"res";
+        break;
+    case ET_LANG:
+        if (e->m_type == L"PNG")
+        {
+            ofn.lpstrFilter = MakeFilterDx(LoadStringDx(IDS_PNGRESBINFILTER));
+            ofn.lpstrDefExt = L"png";
+        }
+        else if (e->m_type == L"JPEG")
+        {
+            ofn.lpstrFilter = MakeFilterDx(LoadStringDx(IDS_JPEGRESBINFILTER));
+            ofn.lpstrDefExt = L"jpg";
+        }
+        else if (e->m_type == L"GIF")
+        {
+            ofn.lpstrFilter = MakeFilterDx(LoadStringDx(IDS_GIFRESBINFILTER));
+            ofn.lpstrDefExt = L"gif";
+        }
+        else if (e->m_type == L"TIFF")
+        {
+            ofn.lpstrFilter = MakeFilterDx(LoadStringDx(IDS_TIFFRESBINFILTER));
+            ofn.lpstrDefExt = L"tif";
+        }
+        else if (e->m_type == L"AVI")
+        {
+            ofn.lpstrFilter = MakeFilterDx(LoadStringDx(IDS_AVIRESBINFILTER));
+            ofn.lpstrDefExt = L"avi";
+        }
+        else if (e->m_type == L"WAVE")
+        {
+            ofn.lpstrFilter = MakeFilterDx(LoadStringDx(IDS_WAVERESBINFILTER));
+            ofn.lpstrDefExt = L"wav";
+        }
+        else
+        {
+            ofn.lpstrFilter = MakeFilterDx(LoadStringDx(IDS_RESBINFILTER));
+            ofn.lpstrDefExt = L"res";
+        }
+        break;
+    default:
+        return;
+    }
+
+    ofn.lpstrTitle = LoadStringDx(IDS_EXTRACTRES);
+    ofn.Flags = OFN_ENABLESIZING | OFN_EXPLORER | OFN_HIDEREADONLY |
+                OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT;
+
+    // let the user choose the path
+    if (GetSaveFileNameW(&ofn))
+    {
+        // extract it to a file
+        if (lstrcmpiW(&ofn.lpstrFile[ofn.nFileExtension], L"res") == 0)
+        {
+            // it was a *.res file
+            if (!g_res.extract_res(ofn.lpstrFile, e))
+            {
+                ErrorBoxDx(IDS_CANNOTSAVE);
+            }
+        }
+        else
+        {
+            // it was not a *.res file
+            if (!g_res.extract_bin(ofn.lpstrFile, e))
+            {
+                ErrorBoxDx(IDS_CANNOTSAVE);
+            }
+        }
+    }
+}
+
+void MMainWnd::OnExtractRC(HWND hwnd)
+{
+    // compile if necessary
+    if (!CompileIfNecessary(TRUE))
+        return;
+
+    // get the selected entry
+    auto e = g_res.get_entry();
+    if (!e)
+        return;     // not selected
+
+    // initialize OPENFILENAME structure
+    WCHAR szFile[MAX_PATH] = L"";
+    OPENFILENAMEW ofn = { OPENFILENAME_SIZE_VERSION_400W, hwnd };
+    ofn.lpstrFile = szFile;
+    ofn.nMaxFile = _countof(szFile);
+    ofn.lpstrFilter = MakeFilterDx(LoadStringDx(IDS_RCFILTER));
+    ofn.lpstrTitle = LoadStringDx(IDS_EXTRACTRES);
+    ofn.Flags = OFN_ENABLESIZING | OFN_EXPLORER | OFN_HIDEREADONLY |
+                OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT;
+    ofn.lpstrDefExt = L"rc";   // the default extension
+
+    // use the prefered filter by the entry
+    EntrySet found;
+    MIdOrString type = e->m_type;
+    switch (e->m_et)
+    {
+    case ET_STRING:
+        g_res.search(found, ET_LANG, RT_STRING, WORD(0), e->m_lang);
+        break;
+    case ET_MESSAGE:
+        g_res.search(found, ET_LANG, RT_MESSAGETABLE, WORD(0), e->m_lang);
+        break;
+    case ET_TYPE:
+        if (type == RT_ICON)
+            type = RT_GROUP_ICON;
+        else if (type == RT_CURSOR)
+            type = RT_GROUP_CURSOR;
+        g_res.search(found, ET_LANG, type, WORD(0), BAD_LANG);
+        break;
+    case ET_NAME:
+        g_res.search(found, ET_LANG, type, e->m_name, BAD_LANG);
+        break;
+    case ET_LANG:
+        g_res.search(found, ET_LANG, type, e->m_name, e->m_lang);
+        break;
+    default:
+        return;
+    }
+
+    if (found.empty())
+    {
+        ErrorBoxDx(IDS_DATAISEMPTY);
+        return;
+    }
+
+    // let the user choose the path
+    if (GetSaveFileNameW(&ofn))
+    {
+        // show the "export options" dialog
+        MExportOptionsDlg dialog;
+        if (dialog.DialogBoxDx(hwnd) != IDOK)
+            return;
+
+        if (!DoExport(szFile, NULL, found))
+        {
+            ErrorBoxDx(IDS_CANTEXPORT);
+        }
+    }
+}
+
+void MMainWnd::PostUpdateLangArrow(HWND hwnd)
+{
+    PostMessage(hwnd, MYWM_UPDATELANGARROW, 0, 0);
+}
+
+LRESULT MMainWnd::OnUpdateLangArrow(HWND hwnd, WPARAM wParam, LPARAM lParam)
+{
+    UpdateLangArrow();
+    return 0;
+}
+
 // extract an icon as an *.ico file
 void MMainWnd::OnExtractIcon(HWND hwnd)
 {
@@ -2477,12 +3123,15 @@ void MMainWnd::OnExtractIcon(HWND hwnd)
         return;
 
     WCHAR szFile[MAX_PATH] = L"";
+    ResToText res2text;
+    MString strFile = res2text.GetEntryFileName(*entry);
+    if (strFile.size())
+    {
+        StringCbCopyW(szFile, sizeof(szFile), strFile.c_str());
+    }
 
     // initialize OPENFILENAME structure
-    OPENFILENAMEW ofn;
-    ZeroMemory(&ofn, sizeof(ofn));
-    ofn.lStructSize = OPENFILENAME_SIZE_VERSION_400W;
-    ofn.hwndOwner = hwnd;
+    OPENFILENAMEW ofn = { OPENFILENAME_SIZE_VERSION_400W, hwnd };
     ofn.lpstrFilter = MakeFilterDx(LoadStringDx(IDS_ICOFILTER));
     ofn.lpstrFile = szFile;
     ofn.nMaxFile = _countof(szFile);
@@ -2534,12 +3183,15 @@ void MMainWnd::OnExtractCursor(HWND hwnd)
         return;
 
     WCHAR szFile[MAX_PATH] = L"";
+    ResToText res2text;
+    MString strFile = res2text.GetEntryFileName(*entry);
+    if (strFile.size())
+    {
+        StringCbCopyW(szFile, sizeof(szFile), strFile.c_str());
+    }
 
     // initialize OPENFILENAME structure
-    OPENFILENAMEW ofn;
-    ZeroMemory(&ofn, sizeof(ofn));
-    ofn.lStructSize = OPENFILENAME_SIZE_VERSION_400W;
-    ofn.hwndOwner = hwnd;
+    OPENFILENAMEW ofn = { OPENFILENAME_SIZE_VERSION_400W, hwnd };
     ofn.lpstrFilter = MakeFilterDx(LoadStringDx(IDS_CURFILTER));
     ofn.lpstrFile = szFile;
     ofn.nMaxFile = _countof(szFile);
@@ -2583,12 +3235,15 @@ void MMainWnd::OnExtractBitmap(HWND hwnd)
         return;
 
     WCHAR szFile[MAX_PATH] = L"";
+    ResToText res2text;
+    MString strFile = res2text.GetEntryFileName(*entry);
+    if (strFile.size())
+    {
+        StringCbCopyW(szFile, sizeof(szFile), strFile.c_str());
+    }
 
     // initialize OPENFILENAME structure
-    OPENFILENAMEW ofn;
-    ZeroMemory(&ofn, sizeof(ofn));
-    ofn.lStructSize = OPENFILENAME_SIZE_VERSION_400W;
-    ofn.hwndOwner = hwnd;
+    OPENFILENAMEW ofn = { OPENFILENAME_SIZE_VERSION_400W, hwnd };
     ofn.lpstrFilter = MakeFilterDx(LoadStringDx(IDS_BMPFILTER));
     ofn.lpstrFile = szFile;
     ofn.nMaxFile = MAX_PATH;
@@ -2628,6 +3283,8 @@ void MMainWnd::OnReplaceBin(HWND hwnd)
         // select the entry
         SelectTV(ET_LANG, dialog, FALSE);
     }
+
+    DoSetFileModified(TRUE);
 }
 
 // version info
@@ -2653,15 +3310,15 @@ void MMainWnd::OnFonts(HWND hwnd)
     MFontsDlg dialog;
     if (dialog.DialogBoxDx(hwnd) == IDOK)
     {
-        // update m_hBinFont and set it to m_hBinEdit
+        // update m_hBinFont and set it to m_hHexViewer
         DeleteObject(m_hBinFont);
         m_hBinFont = dialog.DetachBinFont();
-        SetWindowFont(m_hBinEdit, m_hBinFont, TRUE);
+        SetWindowFont(m_hHexViewer, m_hBinFont, TRUE);
 
-        // update m_hSrcFont and set it to m_hSrcEdit
+        // update m_hSrcFont and set it to m_hCodeEditor
         DeleteObject(m_hSrcFont);
         m_hSrcFont = dialog.DetachSrcFont();
-        SetWindowFont(m_hSrcEdit, m_hSrcFont, TRUE);
+        SetWindowFont(m_hCodeEditor, m_hSrcFont, TRUE);
     }
 }
 
@@ -2672,18 +3329,9 @@ void MMainWnd::OnExport(HWND hwnd)
     if (!CompileIfNecessary(TRUE))
         return;
 
-    // show the "export options" dialog
-    MExportOptionsDlg dialog;
-    if (dialog.DialogBoxDx(hwnd) != IDOK)
-        return;
-
-    WCHAR file[MAX_PATH] = TEXT("");
-
     // initialize OPENFILENAME structure
-    OPENFILENAMEW ofn;
-    ZeroMemory(&ofn, sizeof(ofn));
-    ofn.lStructSize = OPENFILENAME_SIZE_VERSION_400W;
-    ofn.hwndOwner = hwnd;
+    WCHAR file[MAX_PATH] = TEXT("");
+    OPENFILENAMEW ofn = { OPENFILENAME_SIZE_VERSION_400W, hwnd };
     ofn.lpstrFilter = MakeFilterDx(LoadStringDx(IDS_RCFILTER));
     ofn.lpstrFile = file;
     ofn.nMaxFile = _countof(file);
@@ -2695,6 +3343,11 @@ void MMainWnd::OnExport(HWND hwnd)
     // let the user choose the path
     if (GetSaveFileNameW(&ofn))
     {
+        // show the "export options" dialog
+        MExportOptionsDlg dialog;
+        if (dialog.DialogBoxDx(hwnd) != IDOK)
+            return;
+
         // do export!
         if (!DoExport(file))
         {
@@ -2764,10 +3417,7 @@ void MMainWnd::OnLoadWCLib(HWND hwnd)
     WCHAR file[MAX_PATH] = TEXT("");
 
     // initialize OPENFILENAME structure
-    OPENFILENAMEW ofn;
-    ZeroMemory(&ofn, sizeof(ofn));
-    ofn.lStructSize = OPENFILENAME_SIZE_VERSION_400W;
-    ofn.hwndOwner = hwnd;
+    OPENFILENAMEW ofn = { OPENFILENAME_SIZE_VERSION_400W, hwnd };
     ofn.lpstrFilter = MakeFilterDx(LoadStringDx(IDS_DLLFILTER));
     ofn.lpstrFile = file;
     ofn.nMaxFile = _countof(file);
@@ -2803,10 +3453,7 @@ void MMainWnd::OnImport(HWND hwnd)
     WCHAR file[MAX_PATH] = TEXT("");
 
     // initialize OPENFILENAME structure
-    OPENFILENAMEW ofn;
-    ZeroMemory(&ofn, sizeof(ofn));
-    ofn.lStructSize = OPENFILENAME_SIZE_VERSION_400W;
-    ofn.hwndOwner = hwnd;
+    OPENFILENAMEW ofn = { OPENFILENAME_SIZE_VERSION_400W, hwnd };
     ofn.lpstrFilter = MakeFilterDx(LoadStringDx(IDS_IMPORTFILTER));
     ofn.lpstrFile = file;
     ofn.nMaxFile = _countof(file);
@@ -2834,6 +3481,7 @@ void MMainWnd::OnImport(HWND hwnd)
         {
             ErrorBoxDx(IDS_CANNOTIMPORT);
         }
+        DoSetFileModified(TRUE);
     }
 }
 
@@ -2844,19 +3492,19 @@ void MMainWnd::OnOpen(HWND hwnd)
     if (!CompileIfNecessary(FALSE))
         return;
 
+    if (!DoQuerySaveChange(hwnd))
+        return;
+
     // store the nominal path
     WCHAR szFile[MAX_PATH];
     StringCchCopyW(szFile, _countof(szFile), m_szFile);
 
     // if path was not valid, make it empty
-    if (GetFileAttributesW(szFile) == INVALID_FILE_ATTRIBUTES)
+    if (!PathFileExistsW(szFile))
         szFile[0] = 0;
 
     // initialize OPENFILENAME structure
-    OPENFILENAMEW ofn;
-    ZeroMemory(&ofn, sizeof(ofn));
-    ofn.lStructSize = OPENFILENAME_SIZE_VERSION_400W;
-    ofn.hwndOwner = hwnd;
+    OPENFILENAMEW ofn = { OPENFILENAME_SIZE_VERSION_400W, hwnd };
     ofn.lpstrFilter = MakeFilterDx(LoadStringDx(IDS_EXERESRCFILTER));
     ofn.lpstrFile = szFile;
     ofn.nMaxFile = _countof(szFile);
@@ -2873,9 +3521,27 @@ void MMainWnd::OnOpen(HWND hwnd)
     }
 }
 
+BOOL MMainWnd::DoQuerySaveChange(HWND hwnd)
+{
+    if (!s_bModified)
+        return TRUE;
+
+    INT id = MsgBoxDx(IDS_QUERYSAVECHANGE, MB_ICONINFORMATION | MB_YESNOCANCEL);
+    if (id == IDCANCEL)
+        return FALSE;
+
+    if (id == IDYES)
+        return OnSave(hwnd);
+
+    return TRUE;
+}
+
 // clear all the resource data
 void MMainWnd::OnNew(HWND hwnd)
 {
+    if (!DoQuerySaveChange(hwnd))
+        return;
+
     // close preview
     HidePreview();
 
@@ -2885,41 +3551,48 @@ void MMainWnd::OnNew(HWND hwnd)
     // update the file info
     UpdateFileInfo(FT_NONE, NULL, FALSE);
 
-    // 
+    // unselect
     SelectTV(NULL, FALSE);
 
     // clean up
     g_res.delete_all();
+
+    // update modified flag
+    DoSetFileModified(FALSE);
+
+    // update language arrow
+    PostUpdateLangArrow(hwnd);
 }
 
-// save as a file or files
-void MMainWnd::OnSaveAs(HWND hwnd)
+enum ResFileFilterIndex     // see also: IDS_EXERESFILTER
 {
-    enum ResFileFilterIndex     // see also: IDS_EXERESFILTER
-    {
-        RFFI_NONE = 0,
-        RFFI_EXECUTABLE = 1,
-        RFFI_RC = 2,
-        RFFI_RES = 3,
-        RFFI_ALL = 4
-    };
+    RFFI_NONE = 0,
+    RFFI_EXECUTABLE = 1,
+    RFFI_RC = 2,
+    RFFI_RES = 3,
+    RFFI_ALL = 4
+};
 
+// save as a file or files
+BOOL MMainWnd::OnSaveAs(HWND hwnd)
+{
     // compile if necessary
     if (!CompileIfNecessary(TRUE))
-        return;
+        return FALSE;
 
     // store m_szFile to szFile
     WCHAR szFile[MAX_PATH];
     StringCchCopyW(szFile, _countof(szFile), m_szFile);
 
     // if not found, then make it empty
-    if (GetFileAttributesW(szFile) == INVALID_FILE_ATTRIBUTES)
+    if (!PathFileExistsW(szFile))
         szFile[0] = 0;
 
     // was it an executable?
     BOOL bWasExecutable = (m_file_type == FT_EXECUTABLE);
 
-    // delete the filename extension
+    // get and delete the filename extension
+    WCHAR szExt[32] = L"";
     LPWSTR pch = wcsrchr(szFile, L'.');
     static const LPCWSTR s_DotExts[] =
     {
@@ -2929,36 +3602,41 @@ void MMainWnd::OnSaveAs(HWND hwnd)
     {
         if (lstrcmpiW(pch, ext) == 0)
         {
+            StringCbCopyW(szExt, sizeof(szExt), ext + 1);
             *pch = 0;
             break;
         }
     }
 
     // initialize OPENFILENAME structure
-    OPENFILENAMEW ofn;
-    ZeroMemory(&ofn, sizeof(ofn));
-    ofn.lStructSize = OPENFILENAME_SIZE_VERSION_400W;
-    ofn.hwndOwner = hwnd;
+    OPENFILENAMEW ofn = { OPENFILENAME_SIZE_VERSION_400W, hwnd };
     ofn.lpstrFilter = MakeFilterDx(LoadStringDx(IDS_EXERESFILTER));
 
     // use the prefered filter by the entry
     ofn.nFilterIndex = g_settings.nSaveFilterIndex;
-    if (GetFileAttributesW(m_szFile) == INVALID_FILE_ATTRIBUTES || !bWasExecutable)
+    if (bWasExecutable)
+    {
+        if (ofn.nFilterIndex != RFFI_EXECUTABLE)
+            ofn.nFilterIndex = RFFI_EXECUTABLE;
+    }
+    else
     {
         if (ofn.nFilterIndex == RFFI_EXECUTABLE)
             ofn.nFilterIndex = RFFI_RC;
-    }
-    if (bWasExecutable)
-    {
-        if (ofn.nFilterIndex == RFFI_NONE || ofn.nFilterIndex == RFFI_ALL)
-            ofn.nFilterIndex = RFFI_EXECUTABLE;
     }
 
     // use the preferred extension
     switch (ofn.nFilterIndex)
     {
     case RFFI_EXECUTABLE:
-        ofn.lpstrDefExt = L"exe";       // the default extension
+        if (szExt[0])
+        {
+            ofn.lpstrDefExt = szExt;
+        }
+        else
+        {
+            ofn.lpstrDefExt = L"exe";       // the default extension
+        }
         break;
 
     case RFFI_RC:
@@ -2992,10 +3670,12 @@ void MMainWnd::OnSaveAs(HWND hwnd)
         {
         case RFFI_EXECUTABLE:
             // save it
-            if (!DoSaveAs(szFile))
+            if (DoSaveAs(szFile))
             {
-                ErrorBoxDx(IDS_CANNOTSAVE);
+                m_nStatusStringID = IDS_FILESAVED;
+                return TRUE;
             }
+            ErrorBoxDx(IDS_CANNOTSAVE);
             break;
 
         case RFFI_RC:
@@ -3004,7 +3684,7 @@ void MMainWnd::OnSaveAs(HWND hwnd)
                 // show "save options" dialog
                 MSaveOptionsDlg save_options;
                 if (save_options.DialogBoxDx(hwnd) != IDOK)
-                    return;
+                    return FALSE;
 
                 // export
                 WCHAR szResH[MAX_PATH] = L"";
@@ -3015,6 +3695,9 @@ void MMainWnd::OnSaveAs(HWND hwnd)
 
                     // update the file info
                     UpdateFileInfo(FT_RC, szFile, FALSE);
+
+                    m_nStatusStringID = IDS_FILESAVED;
+                    return TRUE;
                 }
                 else
                 {
@@ -3025,10 +3708,12 @@ void MMainWnd::OnSaveAs(HWND hwnd)
 
         case RFFI_RES:
             // save the *.res file
-            if (!DoSaveResAs(szFile))
+            if (DoSaveResAs(szFile))
             {
-                ErrorBoxDx(IDS_CANNOTSAVE);
+                m_nStatusStringID = IDS_FILESAVED;
+                return TRUE;
             }
+            ErrorBoxDx(IDS_CANNOTSAVE);
             break;
 
         default:
@@ -3036,6 +3721,150 @@ void MMainWnd::OnSaveAs(HWND hwnd)
             break;
         }
     }
+
+    return FALSE;
+}
+
+void MMainWnd::OnEga(HWND hwnd)
+{
+    // compile if necessary
+    if (!CompileIfNecessary(TRUE))
+        return;
+
+    MEgaDlg dialog(NULL);
+    dialog.DialogBoxDx(hwnd);
+}
+
+void MMainWnd::OnEgaProgram(HWND hwnd)
+{
+    // compile if necessary
+    if (!CompileIfNecessary(TRUE))
+        return;
+
+    OPENFILENAMEW ofn = { OPENFILENAME_SIZE_VERSION_400W, hwnd };
+
+    WCHAR szDir[MAX_PATH];
+    GetModuleFileNameW(NULL, szDir, ARRAYSIZE(szDir));
+    PathRemoveFileSpecW(szDir);
+
+    WCHAR szFile[MAX_PATH] = L"";
+    StringCbCopyW(szFile, sizeof(szFile), szDir);
+    PathAppendW(szFile, L"EGA");
+    if (!PathIsDirectoryW(szFile))
+    {
+        StringCbCopyW(szFile, sizeof(szFile), szDir);
+        PathAppendW(szFile, L"..\\EGA-samples");
+        if (!PathIsDirectoryW(szFile))
+        {
+            StringCbCopyW(szFile, sizeof(szFile), szDir);
+            PathAppendW(szFile, L"..\\..\\EGA-samples");
+            if (!PathIsDirectoryW(szFile))
+            {
+                StringCbCopyW(szFile, sizeof(szFile), szDir);
+                PathAppendW(szFile, L"..\\..\\..\\EGA-samples");
+                if (!PathIsDirectoryW(szFile))
+                {
+                    return;
+                }
+            }
+        }
+    }
+    PathAppendW(szFile, L"*.ega");
+
+    ofn.hwndOwner = hwnd;
+    ofn.lpstrFilter = MakeFilterDx(LoadStringDx(IDS_EGAFILTER));
+    ofn.lpstrFile = szFile;
+    ofn.nMaxFile = ARRAYSIZE(szFile);
+    ofn.lpstrTitle = LoadStringDx(IDS_LOADEGAPROGRAM);
+    ofn.lpstrDefExt = L"ega";
+    if (GetOpenFileNameW(&ofn))
+    {
+        MEgaDlg dialog(szFile);
+        dialog.DialogBoxDx(hwnd);
+    }
+}
+
+BOOL MMainWnd::OnSave(HWND hwnd)
+{
+    // compile if necessary
+    if (!CompileIfNecessary(TRUE))
+        return FALSE;
+
+    if (!m_szFile[0])
+    {
+        return OnSaveAs(hwnd);
+    }
+
+    LPWSTR pchDotExt = PathFindExtensionW(m_szFile);
+    if (lstrcmpiW(pchDotExt, L".res") == 0)
+    {
+        g_settings.nSaveFilterIndex = RFFI_RES;
+    }
+    else if (lstrcmpiW(pchDotExt, L".rc") == 0)
+    {
+        g_settings.nSaveFilterIndex = RFFI_RC;
+    }
+    else
+    {
+        g_settings.nSaveFilterIndex = RFFI_EXECUTABLE;
+    }
+
+    switch (g_settings.nSaveFilterIndex)
+    {
+    case RFFI_EXECUTABLE:
+        // save it
+        if (DoSaveAs(m_szFile))
+        {
+            m_nStatusStringID = IDS_FILESAVED;
+            return TRUE;
+        }
+        ErrorBoxDx(IDS_CANNOTSAVE);
+        break;
+
+    case RFFI_RC:
+        // export and save it
+        {
+            // show "save options" dialog
+            MSaveOptionsDlg save_options;
+            if (save_options.DialogBoxDx(hwnd) != IDOK)
+                return FALSE;
+
+            // export
+            WCHAR szResH[MAX_PATH] = L"";
+            if (DoExport(m_szFile, szResH))   // succeeded
+            {
+                // save the resource.h path
+                StringCchCopyW(m_szResourceH, _countof(m_szResourceH), szResH);
+
+                // update the file info
+                UpdateFileInfo(FT_RC, m_szFile, FALSE);
+
+                m_nStatusStringID = IDS_FILESAVED;
+                return TRUE;
+            }
+            else
+            {
+                ErrorBoxDx(IDS_CANNOTSAVE);
+            }
+        }
+        break;
+
+    case RFFI_RES:
+        // save the *.res file
+        if (DoSaveResAs(m_szFile))
+        {
+            m_nStatusStringID = IDS_FILESAVED;
+            return TRUE;
+        }
+        ErrorBoxDx(IDS_CANNOTSAVE);
+        break;
+
+    default:
+        assert(0);
+        break;
+    }
+
+    return FALSE;
 }
 
 // update the fonts by the font settings
@@ -3077,8 +3906,8 @@ void MMainWnd::ReCreateFonts(HWND hwnd)
     assert(m_hSrcFont);
 
     // set the fonts to the controls
-    SetWindowFont(m_hBinEdit, m_hBinFont, TRUE);
-    SetWindowFont(m_hSrcEdit, m_hSrcFont, TRUE);
+    SetWindowFont(m_hHexViewer, m_hBinFont, TRUE);
+    SetWindowFont(m_hCodeEditor, m_hSrcFont, TRUE);
 }
 
 // check the text for item search
@@ -3141,7 +3970,6 @@ static unsigned __stdcall
 search_proc(void *arg)
 {
     auto pSearch = (ITEM_SEARCH *)arg;
-    ResToText& res2text = pSearch->res2text;
     MString text;
 
     for (auto entry : g_res)
@@ -3160,27 +3988,23 @@ search_proc(void *arg)
         }
 
         // check internal text
-        if (pSearch->bInternalText)
+        switch (e.m_et)
         {
-            switch (e.m_et)
-            {
-            case ET_LANG:
-            case ET_MESSAGE:
-                break;
-            case ET_STRING:
-                // ignore the name
-                e.m_name.clear();
-                break;
-            default:
-                continue;
-            }
-
-            text = pSearch->res2text.DumpEntry(e);
-            if (CheckTextForSearch(pSearch, entry, text))
-            {
-                //MessageBoxW(NULL, (e.m_strLabel + L"<>" + text).c_str(), NULL, 0);
-                continue;
-            }
+        case ET_LANG:
+        case ET_MESSAGE:
+            break;
+        case ET_STRING:
+            // ignore the name
+            e.m_name.clear();
+            break;
+        default:
+            continue;
+        }
+        text = pSearch->res2text.DumpEntry(e);
+        if (CheckTextForSearch(pSearch, entry, text))
+        {
+            //MessageBoxW(NULL, (e.m_strLabel + L"<>" + text).c_str(), NULL, 0);
+            continue;
         }
     }
 
@@ -3218,7 +4042,7 @@ void MMainWnd::OnCopyAsNewName(HWND hwnd)
     if (dialog.DialogBoxDx(hwnd) == IDOK)
     {
         // search the ET_LANG entries
-        EntrySetBase found;
+        EntrySet found;
         g_res.search(found, ET_LANG, entry->m_type, entry->m_name);
 
         if (entry->m_type == RT_GROUP_ICON)     // group icon
@@ -3245,6 +4069,7 @@ void MMainWnd::OnCopyAsNewName(HWND hwnd)
 
         // select the entry
         SelectTV(ET_NAME, dialog.m_type, dialog.m_name, BAD_LANG, FALSE);
+        DoSetFileModified(TRUE);
     }
 }
 
@@ -3276,7 +4101,7 @@ void MMainWnd::OnCopyAsNewLang(HWND hwnd)
         if (entry->m_type == RT_GROUP_ICON)     // group icon
         {
             // search the group icons
-            EntrySetBase found;
+            EntrySet found;
             g_res.search(found, ET_LANG, RT_GROUP_ICON, entry->m_name, entry->m_lang);
 
             // copy them
@@ -3291,7 +4116,7 @@ void MMainWnd::OnCopyAsNewLang(HWND hwnd)
         else if (entry->m_type == RT_GROUP_CURSOR)
         {
             // search the group cursors
-            EntrySetBase found;
+            EntrySet found;
             g_res.search(found, ET_LANG, RT_GROUP_CURSOR, entry->m_name, entry->m_lang);
 
             // copy them
@@ -3306,7 +4131,7 @@ void MMainWnd::OnCopyAsNewLang(HWND hwnd)
         else if (entry->m_et == ET_STRING)
         {
             // search the strings
-            EntrySetBase found;
+            EntrySet found;
             g_res.search(found, ET_LANG, RT_STRING, WORD(0), entry->m_lang);
 
             // copy them
@@ -3321,7 +4146,7 @@ void MMainWnd::OnCopyAsNewLang(HWND hwnd)
         else if (entry->m_et == ET_MESSAGE)
         {
             // search the messagetables
-            EntrySetBase found;
+            EntrySet found;
             g_res.search(found, ET_LANG, RT_MESSAGETABLE, WORD(0), entry->m_lang);
 
             // copy them
@@ -3336,7 +4161,7 @@ void MMainWnd::OnCopyAsNewLang(HWND hwnd)
         else
         {
             // search the entries
-            EntrySetBase found;
+            EntrySet found;
             g_res.search(found, ET_LANG, entry->m_type, entry->m_name, entry->m_lang);
 
             // copy them
@@ -3348,6 +4173,7 @@ void MMainWnd::OnCopyAsNewLang(HWND hwnd)
             // select the entry
             SelectTV(ET_LANG, dialog.m_type, dialog.m_name, dialog.m_lang, FALSE);
         }
+        DoSetFileModified(TRUE);
     }
 }
 
@@ -3378,13 +4204,92 @@ void MMainWnd::OnItemSearch(HWND hwnd)
 }
 
 // do item search
-void MMainWnd::OnItemSearchBang(HWND hwnd, MItemSearchDlg *pDialog)
+LRESULT MMainWnd::OnItemSearchBang(HWND hwnd, WPARAM wParam, LPARAM lParam)
+{
+    DoItemSearchBang(hwnd, (MItemSearchDlg *)lParam);
+    return 0;
+}
+
+LRESULT MMainWnd::OnComplement(HWND hwnd, WPARAM wParam, LPARAM lParam)
+{
+    INT index = (INT)wParam;
+
+    if (index >= (INT)g_langs.size())
+        return FALSE; // reject
+
+    WORD wNewLang = g_langs[index].LangID;
+
+    auto entry = g_res.get_entry();
+    if (!entry || entry->m_et == ET_TYPE || entry->m_et == ET_NAME)
+        return FALSE;   // reject
+
+    WORD wOldLang = entry->m_lang;
+    if (wNewLang == BAD_LANG || wOldLang == wNewLang)
+        return FALSE;   // reject
+
+    // check if it already exists
+    if (g_res.find(ET_LANG, entry->m_type, entry->m_name, wNewLang))
+    {
+        ErrorBoxDx(IDS_ALREADYEXISTS);
+        return FALSE;   // reject
+    }
+
+    PostUpdateLangArrow(hwnd);
+
+    WCHAR szText[MAX_PATH];
+    MString strLang = TextFromLang(wNewLang);
+    StringCbCopy(szText, sizeof(szText), strLang.c_str());
+    DoRelangEntry(szText, entry, wOldLang, wNewLang);
+    DoSetFileModified(TRUE);
+    return TRUE; // accepted
+}
+
+BOOL MMainWnd::DoInnerSearch(HWND hwnd)
+{
+    DWORD ich, ichEnd;
+    SendMessageW(m_hCodeEditor, EM_GETSEL, (WPARAM)&ich, (LPARAM)&ichEnd);
+
+    MString strText = GetWindowText(m_hCodeEditor);
+
+    MString strTarget = m_search.strText;
+    if (m_search.bIgnoreCases)
+    {
+        CharUpperW(&strText[0]);
+        CharUpperW(&strTarget[0]);
+    }
+
+    size_t index = MString::npos;
+    if (m_search.bDownward)
+    {
+        if (ich == ichEnd)
+            index = strText.find(strTarget);
+        else if (ich + 1 < strText.size())
+            index = strText.find(strTarget, ich + 1);
+    }
+    else
+    {
+        if (ich == ichEnd)
+            index = strText.rfind(strTarget);
+        else if (ich > 0)
+            index = strText.rfind(strTarget, ich - 1);
+    }
+
+    if (index != MString::npos)
+    {
+        SendMessageW(m_hCodeEditor, EM_SETSEL, INT(index), INT(index + strTarget.size()));
+        SendMessageW(m_hCodeEditor, EM_SCROLLCARET, 0, 0);
+        return TRUE;
+    }
+
+    return FALSE;
+}
+
+BOOL MMainWnd::DoItemSearchBang(HWND hwnd, MItemSearchDlg *pDialog)
 {
     // is it visible?
-    if (!IsWindowVisible(pDialog->m_hwnd))
+    if (pDialog == NULL || !IsWindowVisible(pDialog->m_hwnd))
     {
-        assert(0);
-        return;
+        pDialog = NULL;
     }
 
     // get the selected entry
@@ -3401,33 +4306,52 @@ void MMainWnd::OnItemSearchBang(HWND hwnd, MItemSearchDlg *pDialog)
     m_search.pCurrent = entry;
 
     // start searching
+    if (DoInnerSearch(hwnd))
+    {
+        m_search.bRunning = FALSE;
+
+        if (pDialog)
+            pDialog->Done();    // uninitialize
+
+        return TRUE;
+    }
+
     if (DoItemSearch(m_search) && m_search.pFound)
     {
-        pDialog->Done();    // uninitialize
+        m_search.bRunning = FALSE;
+
+        if (pDialog)
+            pDialog->Done();    // uninitialize
 
         // select the found one
         TreeView_SelectItem(m_hwndTV, m_search.pFound->m_hItem);
         TreeView_EnsureVisible(m_hwndTV, m_search.pFound->m_hItem);
 
-        // recalculate the splitter
-        PostMessageDx(MYWM_POSTSEARCH);
+        DoInnerSearch(hwnd);
+        return TRUE;
     }
-    else
-    {
+
+    m_search.bRunning = FALSE;
+
+    if (pDialog)
         pDialog->Done();    // uninitialize
 
-        // is it not cancelled?
-        if (!m_search.bCancelled)
-        {
-            // "no more item" message
+    // is it not cancelled?
+    if (!m_search.bCancelled)
+    {
+        // "no more item" message
+        if (pDialog)
             EnableWindow(*pDialog, FALSE);
-            MsgBoxDx(IDS_NOMOREITEM, MB_ICONINFORMATION);
+        MsgBoxDx(IDS_NOMOREITEM, MB_ICONINFORMATION);
+        if (pDialog)
             EnableWindow(*pDialog, TRUE);
-        }
-
-        // set focus to the dialog
-        SetFocus(*pDialog);
     }
+
+    // set focus to the dialog
+    if (pDialog)
+        SetFocus(*pDialog);
+
+    return FALSE;
 }
 
 // delete a resource item
@@ -3444,6 +4368,7 @@ void MMainWnd::OnDeleteRes(HWND hwnd)
         if (g_res.super()->find(entry) != g_res.end())
             TreeView_DeleteItem(m_hwndTV, entry->m_hItem);
     }
+    DoSetFileModified(TRUE);
 }
 
 // play the sound
@@ -3454,18 +4379,45 @@ void MMainWnd::OnPlay(HWND hwnd)
     if (entry && entry->m_type == L"WAVE")
     {
         // play the sound
-        PlaySound((LPCTSTR)&(*entry)[0], NULL, SND_ASYNC | SND_NODEFAULT | SND_MEMORY);
+        PlaySound(reinterpret_cast<LPCTSTR>(&(*entry)[0]), NULL,
+                  SND_ASYNC | SND_NODEFAULT | SND_MEMORY);
     }
+}
+
+void MMainWnd::OnSelChange(HWND hwnd, INT iSelected)
+{
+    if (iSelected != m_tab.GetCurSel())
+    {
+        // update tab control selection
+        m_tab.SetCurSel(iSelected);
+    }
+
+    // update g_settings.bShowBinEdit
+    switch (iSelected)
+    {
+    case 0:
+        g_settings.bShowBinEdit = FALSE;
+        break;
+    case 1:
+        g_settings.bShowBinEdit = TRUE;
+        break;
+    }
+
+    // update show
+    SetShowMode(m_nShowMode);
+
+    // relayout
+    PostMessage(hwnd, WM_SIZE, 0, 0);
 }
 
 // cancel edit
 void MMainWnd::OnCancelEdit(HWND hwnd)
 {
     // clear modification flag
-    Edit_SetModify(m_hSrcEdit, FALSE);
-    Edit_SetReadOnly(m_hSrcEdit, FALSE);
+    Edit_SetModify(m_hCodeEditor, FALSE);
+    Edit_SetReadOnly(m_hCodeEditor, FALSE);
 
-    // reselect to update the m_hSrcEdit
+    // reselect to update the m_hCodeEditor
     auto entry = g_res.get_entry();
     SelectTV(entry, FALSE);
 }
@@ -3473,33 +4425,15 @@ void MMainWnd::OnCancelEdit(HWND hwnd)
 // set error message
 void MMainWnd::SetErrorMessage(const MStringA& strOutput, BOOL bBox)
 {
-    if (bBox)
+    // show the message box
+    if (strOutput.empty())
     {
-        // show the message box
-        if (strOutput.empty())
-        {
-            MWideToAnsi ansi(CP_ACP, LoadStringDx(IDS_COMPILEERROR));
-            MessageBoxA(m_hwnd, ansi.c_str(), NULL, MB_ICONERROR);
-        }
-        else
-        {
-            MessageBoxA(m_hwnd, strOutput.c_str(), NULL, MB_ICONERROR);
-        }
+        MsgBoxDx(LoadStringDx(IDS_COMPILEERROR), MB_ICONERROR);
     }
     else
     {
-        // show the message in m_hBinEdit
-        if (strOutput.empty())
-        {
-            SetWindowTextW(m_hBinEdit, LoadStringDx(IDS_COMPILEERROR));
-        }
-        else
-        {
-            SetWindowTextA(m_hBinEdit, (char *)&strOutput[0]);
-        }
-
-        // show m_hBinEdit
-        ShowBinEdit(TRUE, TRUE);
+        MAnsiToWide wide(CP_ACP, strOutput.c_str());
+        MsgBoxDx(wide.c_str(), MB_ICONERROR);
     }
 }
 
@@ -3515,7 +4449,7 @@ void MMainWnd::OnCompile(HWND hwnd)
         return;
 
     // is it not modified?
-    if (!Edit_GetModify(m_hSrcEdit))
+    if (!Edit_GetModify(m_hCodeEditor))
     {
         // select the entry
         SelectTV(entry, FALSE);
@@ -3524,22 +4458,21 @@ void MMainWnd::OnCompile(HWND hwnd)
 
     ChangeStatusText(IDS_COMPILING);
 
-    // m_hSrcEdit --> strWide
-    INT cchText = ::GetWindowTextLengthW(m_hSrcEdit);
-    MStringW strWide;
-    strWide.resize(cchText);
-    GetWindowTextW(m_hSrcEdit, &strWide[0], cchText + 1);
+    // m_hCodeEditor --> strWide
+    MStringW strWide = MWindowBase::GetWindowTextW(m_hCodeEditor);
 
     // compile the strWide text
     MStringA strOutput;
     if (CompileParts(strOutput, entry->m_type, entry->m_name, entry->m_lang, strWide, bReopen))
     {
+        m_nStatusStringID = IDS_RECOMPILEOK;
+
         // clear the control selection
         MRadCtrl::GetTargets().clear();
-        m_hSrcEdit.ClearIndeces();
+        m_hCodeEditor.ClearIndeces();
 
         // clear the modification flag
-        Edit_SetModify(m_hSrcEdit, FALSE);
+        Edit_SetModify(m_hCodeEditor, FALSE);
 
         // select the entry
         SelectTV(entry, FALSE);
@@ -3547,6 +4480,7 @@ void MMainWnd::OnCompile(HWND hwnd)
     else
     {
         // failed
+        m_nStatusStringID = IDS_RECOMPILEFAILED;
         SetErrorMessage(strOutput);
     }
 }
@@ -3583,6 +4517,8 @@ void MMainWnd::OnGuiEdit(HWND hwnd)
             INT nID = (INT)dialog.DialogBoxDx(hwnd);
             if (nID == IDOK)
             {
+                DoSetFileModified(TRUE);
+
                 // update accel_res
                 accel_res.Update();
 
@@ -3592,7 +4528,7 @@ void MMainWnd::OnGuiEdit(HWND hwnd)
         }
 
         // make it non-read-only
-        Edit_SetReadOnly(m_hSrcEdit, FALSE);
+        Edit_SetReadOnly(m_hCodeEditor, FALSE);
 
         // select the entry
         SelectTV(entry, FALSE);
@@ -3615,6 +4551,8 @@ void MMainWnd::OnGuiEdit(HWND hwnd)
             INT nID = (INT)dialog.DialogBoxDx(hwnd);
             if (nID == IDOK)
             {
+                DoSetFileModified(TRUE);
+
                 // update menu_res
                 menu_res.Update();
 
@@ -3624,7 +4562,7 @@ void MMainWnd::OnGuiEdit(HWND hwnd)
         }
 
         // make it non-read-only
-        Edit_SetReadOnly(m_hSrcEdit, FALSE);
+        Edit_SetReadOnly(m_hCodeEditor, FALSE);
 
         // select the entry
         SelectTV(entry, FALSE);
@@ -3634,6 +4572,9 @@ void MMainWnd::OnGuiEdit(HWND hwnd)
     }
     else if (entry->m_type == RT_DIALOG)
     {
+        // editing...
+        ChangeStatusText(IDS_EDITINGBYGUI);
+
         // entry->m_data --> m_rad_window.m_dialog_res
         MByteStreamEx stream(entry->m_data);
         m_rad_window.m_dialog_res.LoadFromStream(stream);
@@ -3644,6 +4585,10 @@ void MMainWnd::OnGuiEdit(HWND hwnd)
 
         // load RT_DLGINIT
         if (auto e = g_res.find(ET_LANG, RT_DLGINIT, entry->m_name, entry->m_lang))
+        {
+            m_rad_window.m_dialog_res.LoadDlgInitData(e->m_data);
+        }
+        else if (auto e = g_res.find(ET_LANG, RT_DLGINIT, entry->m_name, BAD_LANG))
         {
             m_rad_window.m_dialog_res.LoadDlgInitData(e->m_data);
         }
@@ -3664,7 +4609,7 @@ void MMainWnd::OnGuiEdit(HWND hwnd)
         }
 
         // make it non-read-only
-        Edit_SetReadOnly(m_hSrcEdit, FALSE);
+        Edit_SetReadOnly(m_hCodeEditor, FALSE);
     }
     else if (entry->m_type == RT_DLGINIT)
     {
@@ -3681,13 +4626,15 @@ void MMainWnd::OnGuiEdit(HWND hwnd)
             INT nID = (INT)dialog.DialogBoxDx(hwnd);
             if (nID == IDOK)
             {
+                DoSetFileModified(TRUE);
+
                 // dlginit_res --> entry->m_data
                 entry->m_data = dlginit_res.data();
             }
         }
 
         // make it non-read-only
-        Edit_SetReadOnly(m_hSrcEdit, FALSE);
+        Edit_SetReadOnly(m_hCodeEditor, FALSE);
 
         // select the entry
         SelectTV(entry, FALSE);
@@ -3699,7 +4646,7 @@ void MMainWnd::OnGuiEdit(HWND hwnd)
     {
         // g_res --> found
         WORD lang = entry->m_lang;
-        EntrySetBase found;
+        EntrySet found;
         g_res.search(found, ET_LANG, RT_STRING, WORD(0), lang);
 
         // found --> str_res
@@ -3722,6 +4669,8 @@ void MMainWnd::OnGuiEdit(HWND hwnd)
         INT nID = (INT)dialog.DialogBoxDx(hwnd);
         if (nID == IDOK)
         {
+            DoSetFileModified(TRUE);
+
             // dialog --> str_res
             str_res = dialog.m_str_res;
 
@@ -3735,17 +4684,20 @@ void MMainWnd::OnGuiEdit(HWND hwnd)
             MStringA strOutput;
             if (CompileParts(strOutput, RT_STRING, WORD(0), lang, strWide))
             {
+                m_nStatusStringID = IDS_RECOMPILEOK;
+
                 // select the entry to update the source
                 SelectTV(ET_STRING, RT_STRING, WORD(0), lang, FALSE);
             }
             else
             {
+                m_nStatusStringID = IDS_RECOMPILEFAILED;
                 SetErrorMessage(strOutput);
             }
         }
 
         // make it non-read-only
-        Edit_SetReadOnly(m_hSrcEdit, FALSE);
+        Edit_SetReadOnly(m_hCodeEditor, FALSE);
 
         // ready
         ChangeStatusText(IDS_READY);
@@ -3754,7 +4706,7 @@ void MMainWnd::OnGuiEdit(HWND hwnd)
     {
         // g_res --> found
         WORD lang = entry->m_lang;
-        EntrySetBase found;
+        EntrySet found;
         g_res.search(found, ET_LANG, RT_MESSAGETABLE, WORD(0), lang);
 
         // found --> msg_res
@@ -3777,6 +4729,8 @@ void MMainWnd::OnGuiEdit(HWND hwnd)
         INT nID = (INT)dialog.DialogBoxDx(hwnd);
         if (nID == IDOK)
         {
+            DoSetFileModified(TRUE);
+
             // dialog --> msg_res
             msg_res = dialog.m_msg_res;
 
@@ -3790,17 +4744,20 @@ void MMainWnd::OnGuiEdit(HWND hwnd)
             MStringA strOutput;
             if (CompileParts(strOutput, RT_MESSAGETABLE, WORD(1), lang, strWide))
             {
+                m_nStatusStringID = IDS_RECOMPILEOK;
+
                 // select the entry
                 SelectTV(ET_MESSAGE, RT_MESSAGETABLE, (WORD)0, lang, FALSE);
             }
             else
             {
+                m_nStatusStringID = IDS_RECOMPILEFAILED;
                 SetErrorMessage(strOutput);
             }
         }
 
         // make it non-read-only
-        Edit_SetReadOnly(m_hSrcEdit, FALSE);
+        Edit_SetReadOnly(m_hCodeEditor, FALSE);
 
         // ready
         ChangeStatusText(IDS_READY);
@@ -3854,7 +4811,7 @@ void MMainWnd::OnEdit(HWND hwnd)
         return;
 
     // make it non-read-only
-    Edit_SetReadOnly(m_hSrcEdit, FALSE);
+    Edit_SetReadOnly(m_hCodeEditor, FALSE);
 
     // select the entry
     SelectTV(entry, TRUE);
@@ -3866,29 +4823,24 @@ void MMainWnd::OnOpenReadMe(HWND hwnd)
     // get the module path filename of this application module
     WCHAR szPath[MAX_PATH];
     GetModuleFileNameW(NULL, szPath, _countof(szPath));
-
-    // find the last '\\' or '/'
-    LPWSTR pch = wcsrchr(szPath, L'\\');
-    if (pch == NULL)
-        pch = wcsrchr(szPath, L'/');
-    if (pch == NULL)
-        pch = szPath;
-    else
-        ++pch;
+    LPWSTR pch = PathFindFileNameW(szPath);
 
     // find the "README.txt" file
-    size_t diff = pch - szPath;
-    StringCchCopyW(pch, diff, L"README.txt");
-    if (GetFileAttributesW(szPath) == INVALID_FILE_ATTRIBUTES)
+    *pch = 0;
+    PathAppendW(szPath, L"README.txt");
+    if (!PathFileExistsW(szPath))
     {
-        StringCchCopyW(pch, diff, L"..\\README.txt");
-        if (GetFileAttributesW(szPath) == INVALID_FILE_ATTRIBUTES)
+        *pch = 0;
+        PathAppendW(szPath, L"..\\README.txt");
+        if (!PathFileExistsW(szPath))
         {
-            StringCchCopyW(pch, diff, L"..\\..\\README.txt");
-            if (GetFileAttributesW(szPath) == INVALID_FILE_ATTRIBUTES)
+            *pch = 0;
+            PathAppendW(szPath, L"..\\..\\README.txt");
+            if (!PathFileExistsW(szPath))
             {
-                StringCchCopyW(pch, diff, L"..\\..\\..\\README.txt");
-                if (GetFileAttributesW(szPath) == INVALID_FILE_ATTRIBUTES)
+                *pch = 0;
+                PathAppendW(szPath, L"..\\..\\..\\README.txt");
+                if (!PathFileExistsW(szPath))
                 {
                     return;
                 }
@@ -3906,29 +4858,94 @@ void MMainWnd::OnOpenReadMeJp(HWND hwnd)
     // get the module path filename of this application module
     WCHAR szPath[MAX_PATH];
     GetModuleFileNameW(NULL, szPath, _countof(szPath));
-
-    // find the last '\\' or '/'
-    LPWSTR pch = wcsrchr(szPath, L'\\');
-    if (pch == NULL)
-        pch = wcsrchr(szPath, L'/');
-    if (pch == NULL)
-        pch = szPath;
-    else
-        ++pch;
+    LPWSTR pch = PathFindFileNameW(szPath);
 
     // find the "READMEJP.txt" file
-    size_t diff = pch - szPath;
-    StringCchCopyW(pch, diff, L"READMEJP.txt");
-    if (GetFileAttributesW(szPath) == INVALID_FILE_ATTRIBUTES)
+    *pch = 0;
+    PathAppendW(szPath, L"READMEJP.txt");
+    if (!PathFileExistsW(szPath))
     {
-        StringCchCopyW(pch, diff, L"..\\READMEJP.txt");
-        if (GetFileAttributesW(szPath) == INVALID_FILE_ATTRIBUTES)
+        *pch = 0;
+        PathAppendW(szPath, L"..\\READMEJP.txt");
+        if (!PathFileExistsW(szPath))
         {
-            StringCchCopyW(pch, diff, L"..\\..\\READMEJP.txt");
-            if (GetFileAttributesW(szPath) == INVALID_FILE_ATTRIBUTES)
+            *pch = 0;
+            PathAppendW(szPath, L"..\\..\\READMEJP.txt");
+            if (!PathFileExistsW(szPath))
             {
-                StringCchCopyW(pch, diff, L"..\\..\\..\\READMEJP.txt");
-                if (GetFileAttributesW(szPath) == INVALID_FILE_ATTRIBUTES)
+                *pch = 0;
+                PathAppendW(szPath, L"..\\..\\..\\READMEJP.txt");
+                if (!PathFileExistsW(szPath))
+                {
+                    return;
+                }
+            }
+        }
+    }
+
+    // open it
+    ShellExecuteW(hwnd, NULL, szPath, NULL, NULL, SW_SHOWNORMAL);
+}
+
+// Open EGA Manual
+void MMainWnd::OnOpenEgaManual(HWND hwnd)
+{
+    // get the module path filename of this application module
+    WCHAR szPath[MAX_PATH];
+    GetModuleFileNameW(NULL, szPath, _countof(szPath));
+    LPWSTR pch = PathFindFileNameW(szPath);
+
+    // find the "EGA-Manual.pdf" file
+    *pch = 0;
+    PathAppendW(szPath, L"EGA\\EGA-Manual.pdf");
+    if (!PathFileExistsW(szPath))
+    {
+        *pch = 0;
+        PathAppendW(szPath, L"..\\EGA\\EGA-Manual.pdf");
+        if (!PathFileExistsW(szPath))
+        {
+            *pch = 0;
+            PathAppendW(szPath, L"..\\..\\EGA\\EGA-Manual.pdf");
+            if (!PathFileExistsW(szPath))
+            {
+                *pch = 0;
+                PathAppendW(szPath, L"..\\..\\..\\EGA\\EGA-Manual.pdf");
+                if (!PathFileExistsW(szPath))
+                {
+                    return;
+                }
+            }
+        }
+    }
+
+    // open it
+    ShellExecuteW(hwnd, NULL, szPath, NULL, NULL, SW_SHOWNORMAL);
+}
+
+// Open READMEIT (Italian)
+void MMainWnd::OnOpenReadMeIt(HWND hwnd)
+{
+    // get the module path filename of this application module
+    WCHAR szPath[MAX_PATH];
+    GetModuleFileNameW(NULL, szPath, _countof(szPath));
+    LPWSTR pch = PathFindFileNameW(szPath);
+
+    // find the "READMEIT.txt" file
+    *pch = 0;
+    PathAppendW(szPath, L"READMEIT.txt");
+    if (!PathFileExistsW(szPath))
+    {
+        *pch = 0;
+        PathAppendW(szPath, L"..\\READMEIT.txt");
+        if (!PathFileExistsW(szPath))
+        {
+            *pch = 0;
+            PathAppendW(szPath, L"..\\..\\READMEIT.txt");
+            if (!PathFileExistsW(szPath))
+            {
+                *pch = 0;
+                PathAppendW(szPath, L"..\\..\\..\\READMEIT.txt");
+                if (!PathFileExistsW(szPath))
                 {
                     return;
                 }
@@ -3946,29 +4963,59 @@ void MMainWnd::OnOpenHyojunka(HWND hwnd)
     // get the module path filename of this application module
     WCHAR szPath[MAX_PATH];
     GetModuleFileNameW(NULL, szPath, _countof(szPath));
-
-    // find the last '\\' or '/'
-    LPWSTR pch = wcsrchr(szPath, L'\\');
-    if (pch == NULL)
-        pch = wcsrchr(szPath, L'/');
-    if (pch == NULL)
-        pch = szPath;
-    else
-        ++pch;
+    LPWSTR pch = PathFindFileNameW(szPath);
 
     // find the "HYOJUNKA.txt" file
-    size_t diff = pch - szPath;
-    StringCchCopyW(pch, diff, L"HYOJUNKA.txt");
-    if (GetFileAttributesW(szPath) == INVALID_FILE_ATTRIBUTES)
+    *pch = 0;
+    PathAppendW(szPath, L"HYOJUNKA.txt");
+    if (!PathFileExistsW(szPath))
     {
-        StringCchCopyW(pch, diff, L"..\\HYOJUNKA.txt");
-        if (GetFileAttributesW(szPath) == INVALID_FILE_ATTRIBUTES)
+        *pch = 0;
+        PathAppendW(szPath, L"..\\HYOJUNKA.txt");
+        if (!PathFileExistsW(szPath))
         {
-            StringCchCopyW(pch, diff, L"..\\..\\HYOJUNKA.txt");
-            if (GetFileAttributesW(szPath) == INVALID_FILE_ATTRIBUTES)
+            *pch = 0;
+            PathAppendW(szPath, L"..\\..\\HYOJUNKA.txt");
+            if (!PathFileExistsW(szPath))
             {
-                StringCchCopyW(pch, diff, L"..\\..\\..\\HYOJUNKA.txt");
-                if (GetFileAttributesW(szPath) == INVALID_FILE_ATTRIBUTES)
+                *pch = 0;
+                PathAppendW(szPath, L"..\\..\\..\\HYOJUNKA.txt");
+                if (!PathFileExistsW(szPath))
+                {
+                    return;
+                }
+            }
+        }
+    }
+
+    // open it
+    ShellExecuteW(hwnd, NULL, szPath, NULL, NULL, SW_SHOWNORMAL);
+}
+
+// Open READMEKO (Korean)
+void MMainWnd::OnOpenReadMeKo(HWND hwnd)
+{
+    // get the module path filename of this application module
+    WCHAR szPath[MAX_PATH];
+    GetModuleFileNameW(NULL, szPath, _countof(szPath));
+    LPWSTR pch = PathFindFileNameW(szPath);
+
+    // find the "READMEIT.txt" file
+    *pch = 0;
+    PathAppendW(szPath, L"READMEKO.txt");
+    if (!PathFileExistsW(szPath))
+    {
+        *pch = 0;
+        PathAppendW(szPath, L"..\\READMEKO.txt");
+        if (!PathFileExistsW(szPath))
+        {
+            *pch = 0;
+            PathAppendW(szPath, L"..\\..\\READMEKO.txt");
+            if (!PathFileExistsW(szPath))
+            {
+                *pch = 0;
+                PathAppendW(szPath, L"..\\..\\..\\READMEKO.txt");
+                if (!PathFileExistsW(szPath))
                 {
                     return;
                 }
@@ -3986,29 +5033,24 @@ void MMainWnd::OnOpenLicense(HWND hwnd)
     // get the module path filename of this application module
     WCHAR szPath[MAX_PATH];
     GetModuleFileNameW(NULL, szPath, _countof(szPath));
-
-    // find the last '\\' or '/'
-    LPWSTR pch = wcsrchr(szPath, L'\\');
-    if (pch == NULL)
-        pch = wcsrchr(szPath, L'/');
-    if (pch == NULL)
-        pch = szPath;
-    else
-        ++pch;
+    LPWSTR pch = PathFindFileNameW(szPath);
 
     // find the "LICENSE.txt" file
-    size_t diff = pch - szPath;
-    StringCchCopyW(pch, diff, L"LICENSE.txt");
-    if (GetFileAttributesW(szPath) == INVALID_FILE_ATTRIBUTES)
+    *pch = 0;
+    PathAppendW(szPath, L"LICENSE.txt");
+    if (!PathFileExistsW(szPath))
     {
-        StringCchCopyW(pch, diff, L"..\\LICENSE.txt");
-        if (GetFileAttributesW(szPath) == INVALID_FILE_ATTRIBUTES)
+        *pch = 0;
+        PathAppendW(szPath, L"..\\LICENSE.txt");
+        if (!PathFileExistsW(szPath))
         {
-            StringCchCopyW(pch, diff, L"..\\..\\LICENSE.txt");
-            if (GetFileAttributesW(szPath) == INVALID_FILE_ATTRIBUTES)
+            *pch = 0;
+            PathAppendW(szPath, L"..\\..\\LICENSE.txt");
+            if (!PathFileExistsW(szPath))
             {
-                StringCchCopyW(pch, diff, L"..\\..\\..\\LICENSE.txt");
-                if (GetFileAttributesW(szPath) == INVALID_FILE_ATTRIBUTES)
+                *pch = 0;
+                PathAppendW(szPath, L"..\\..\\..\\LICENSE.txt");
+                if (!PathFileExistsW(szPath))
                 {
                     return;
                 }
@@ -4131,55 +5173,47 @@ void MMainWnd::OnDebugTreeNode(HWND hwnd)
     MsgBoxDx(sz, MB_ICONINFORMATION);
 }
 
-// show the movie or not
-void MMainWnd::ShowMovie(BOOL bShow/* = TRUE*/)
+void MMainWnd::SetShowMode(SHOW_MODE mode)
 {
-    if (bShow)
+    m_nShowMode = mode;
+    if (g_settings.bShowBinEdit)
     {
-        // show the movie
-        ShowWindow(m_hBmpView, SW_SHOWNOACTIVATE);
-        ShowWindow(m_hSrcEdit, SW_HIDE);
-        m_splitter3.SetPaneCount(1);
-        m_splitter3.SetPane(0, m_hBmpView);
-    }
-    else
-    {
-        // hide the movie
-        ShowBmpView(FALSE);
-    }
-}
-
-// show the image file or not
-void MMainWnd::ShowBmpView(BOOL bShow/* = TRUE*/)
-{
-    ShowWindow(m_hSrcEdit, SW_SHOWNOACTIVATE);
-    if (bShow)
-    {
-        // show m_hBmpView
-        ShowWindow(m_hBmpView, SW_SHOWNOACTIVATE);
-        m_splitter3.SetPaneCount(2);
-        m_splitter3.SetPane(0, m_hSrcEdit);
-        m_splitter3.SetPane(1, m_hBmpView);
-
-        // resume the width
-        m_splitter3.SetPaneExtent(1, g_settings.nBmpViewWidth);
-    }
-    else
-    {
-        if (m_splitter3.GetPaneCount() >= 2)
-        {
-            // remember the m_hBmpView width
-            g_settings.nBmpViewWidth = m_splitter3.GetPaneExtent(1);
-        }
-
-        // hide m_hBmpView
+        ShowWindow(m_hCodeEditor, SW_HIDE);
         ShowWindow(m_hBmpView, SW_HIDE);
-        m_splitter3.SetPaneCount(1);
-        m_splitter3.SetPane(0, m_hSrcEdit);
+        ShowWindow(m_hHexViewer, SW_SHOWNOACTIVATE);
+        m_splitter2.SetPaneCount(1);
+        m_splitter2.SetPane(0, m_hHexViewer);
     }
-
-    // update m_hBmpView's scroll info
-    SendMessageW(m_hBmpView, WM_COMMAND, 999, 0);
+    else
+    {
+        switch (mode)
+        {
+        case SHOW_MOVIE:
+            ShowWindow(m_hCodeEditor, SW_HIDE);
+            ShowWindow(m_hBmpView, SW_SHOWNOACTIVATE);
+            ShowWindow(m_hHexViewer, SW_HIDE);
+            m_splitter2.SetPaneCount(1);
+            m_splitter2.SetPane(0, m_hBmpView);
+            break;
+        case SHOW_CODEONLY:
+            ShowWindow(m_hCodeEditor, SW_SHOWNOACTIVATE);
+            ShowWindow(m_hBmpView, SW_HIDE);
+            ShowWindow(m_hHexViewer, SW_HIDE);
+            m_splitter2.SetPaneCount(1);
+            m_splitter2.SetPane(0, m_hCodeEditor);
+            break;
+        case SHOW_CODEANDBMP:
+            ShowWindow(m_hCodeEditor, SW_SHOWNOACTIVATE);
+            ShowWindow(m_hBmpView, SW_SHOWNOACTIVATE);
+            ShowWindow(m_hHexViewer, SW_HIDE);
+            m_splitter2.SetPaneCount(2);
+            m_splitter2.SetPane(0, m_hCodeEditor);
+            m_splitter2.SetPane(1, m_hBmpView);
+            m_splitter2.SetPaneExtent(1, g_settings.nBmpViewWidth);
+            break;
+        }
+    }
+    PostMessage(m_hwnd, WM_SIZE, 0, 0);
 }
 
 // show the status bar or not
@@ -4189,35 +5223,6 @@ void MMainWnd::ShowStatusBar(BOOL bShow/* = TRUE*/)
         ShowWindow(m_hStatusBar, SW_SHOWNOACTIVATE);
     else
         ShowWindow(m_hStatusBar, SW_HIDE);
-}
-
-// show the binary/error EDIT control or not
-void MMainWnd::ShowBinEdit(BOOL bShow/* = TRUE*/, BOOL bShowError/* = FALSE*/)
-{
-    if (bShow && (g_settings.bShowBinEdit || bShowError))
-    {
-        // show the binary EDIT control
-        ShowWindow(m_hBinEdit, SW_SHOWNOACTIVATE);
-        m_splitter2.SetPaneCount(2);
-        m_splitter2.SetPane(0, m_splitter3);
-        m_splitter2.SetPane(1, m_hBinEdit);
-
-        // resume the height
-        m_splitter2.SetPaneExtent(1, g_settings.nBinEditHeight);
-    }
-    else
-    {
-        if (m_splitter2.GetPaneCount() >= 2)
-        {
-            // remember the binary EDIT control's height
-            g_settings.nBinEditHeight = m_splitter2.GetPaneExtent(1);
-        }
-
-        // hide the binary EDIT control
-        ShowWindow(m_hBinEdit, SW_HIDE);
-        m_splitter2.SetPaneCount(1);
-        m_splitter2.SetPane(0, m_splitter3);
-    }
 }
 
 // WM_MOVE: the main window has moved
@@ -4290,6 +5295,13 @@ void MMainWnd::OnSize(HWND hwnd, UINT state, int cx, int cy)
 
     // notify the size change to m_splitter1
     MoveWindow(m_splitter1, x, y, sizClient.cx, sizClient.cy, TRUE);
+
+    // resize m_splitter2
+    GetClientRect(m_tab, &rc);
+    m_tab.AdjustRect(FALSE, &rc);
+    MapWindowRect(m_tab, GetParent(m_splitter2), &rc);
+    SIZE siz = SizeFromRectDx(&rc);
+    MoveWindow(m_splitter2, rc.left, rc.top, siz.cx, siz.cy, TRUE);
 }
 
 // WM_INITMENU: update the menus
@@ -4300,19 +5312,45 @@ void MMainWnd::OnInitMenu(HWND hwnd, HMENU hMenu)
     else
         CheckMenuItem(hMenu, ID_WORD_WRAP, MF_BYCOMMAND | MF_UNCHECKED);
 
+    if (m_szResourceH[0])
+        EnableMenuItem(hMenu, ID_UNLOADRESH, MF_BYCOMMAND | MF_ENABLED);
+    else
+        EnableMenuItem(hMenu, ID_UNLOADRESH, MF_BYCOMMAND | MF_GRAYED);
+
     // search the language entries
-    EntrySetBase found;
+    EntrySet found;
     g_res.search(found, ET_LANG);
 
     if (found.empty())
+    {
         EnableMenuItem(hMenu, ID_ITEMSEARCH, MF_GRAYED);
+        EnableMenuItem(hMenu, ID_EXPAND_ALL, MF_GRAYED);
+        EnableMenuItem(hMenu, ID_COLLAPSE_ALL, MF_GRAYED);
+        EnableMenuItem(hMenu, ID_FIND, MF_GRAYED);
+        EnableMenuItem(hMenu, ID_FINDUPWARD, MF_GRAYED);
+        EnableMenuItem(hMenu, ID_FINDDOWNWARD, MF_GRAYED);
+        EnableMenuItem(hMenu, ID_REPLACE, MF_GRAYED);
+    }
     else
+    {
         EnableMenuItem(hMenu, ID_ITEMSEARCH, MF_ENABLED);
+        EnableMenuItem(hMenu, ID_EXPAND_ALL, MF_ENABLED);
+        EnableMenuItem(hMenu, ID_COLLAPSE_ALL, MF_ENABLED);
+        EnableMenuItem(hMenu, ID_FIND, MF_ENABLED);
+        EnableMenuItem(hMenu, ID_FINDUPWARD, MF_ENABLED);
+        EnableMenuItem(hMenu, ID_FINDDOWNWARD, MF_ENABLED);
+        EnableMenuItem(hMenu, ID_REPLACE, MF_ENABLED);
+    }
 
     if (g_settings.bShowToolBar)
         CheckMenuItem(hMenu, ID_SHOWHIDETOOLBAR, MF_BYCOMMAND | MF_CHECKED);
     else
         CheckMenuItem(hMenu, ID_SHOWHIDETOOLBAR, MF_BYCOMMAND | MF_UNCHECKED);
+
+    if (g_settings.bUseBeginEnd)
+        CheckMenuItem(hMenu, ID_USEBEGINEND, MF_BYCOMMAND | MF_CHECKED);
+    else
+        CheckMenuItem(hMenu, ID_USEBEGINEND, MF_BYCOMMAND | MF_UNCHECKED);
 
     BOOL bCanEditLabel = TRUE;
 
@@ -4351,7 +5389,7 @@ void MMainWnd::OnInitMenu(HWND hwnd, HMENU hMenu)
     else
         CheckMenuItem(hMenu, ID_STATUSBAR, MF_UNCHECKED);
 
-    if (IsWindowVisible(m_hBinEdit))
+    if (g_settings.bShowBinEdit)
         CheckMenuItem(hMenu, ID_BINARYPANE, MF_CHECKED);
     else
         CheckMenuItem(hMenu, ID_BINARYPANE, MF_UNCHECKED);
@@ -4366,26 +5404,10 @@ void MMainWnd::OnInitMenu(HWND hwnd, HMENU hMenu)
     else
         CheckMenuItem(hMenu, ID_HIDEIDMACROS, MF_UNCHECKED);
 
-    if (g_settings.bHasIDC_STATIC)
+    if (g_settings.bUseIDC_STATIC)
         CheckMenuItem(hMenu, ID_USEIDC_STATIC, MF_CHECKED);
     else
         CheckMenuItem(hMenu, ID_USEIDC_STATIC, MF_UNCHECKED);
-
-    if (GetWindowTextLength(m_hSrcEdit) == 0 ||
-        !IsWindowVisible(m_hSrcEdit))
-    {
-        EnableMenuItem(hMenu, ID_FIND, MF_GRAYED);
-        EnableMenuItem(hMenu, ID_FINDDOWNWARD, MF_GRAYED);
-        EnableMenuItem(hMenu, ID_FINDUPWARD, MF_GRAYED);
-        EnableMenuItem(hMenu, ID_REPLACE, MF_GRAYED);
-    }
-    else
-    {
-        EnableMenuItem(hMenu, ID_FIND, MF_ENABLED);
-        EnableMenuItem(hMenu, ID_FINDDOWNWARD, MF_ENABLED);
-        EnableMenuItem(hMenu, ID_FINDUPWARD, MF_ENABLED);
-        EnableMenuItem(hMenu, ID_REPLACE, MF_ENABLED);
-    }
 
     if (!entry || !entry->m_hItem)
     {
@@ -4403,8 +5425,11 @@ void MMainWnd::OnInitMenu(HWND hwnd, HMENU hMenu)
         EnableMenuItem(hMenu, ID_GUIEDIT, MF_GRAYED);
         EnableMenuItem(hMenu, ID_COPYASNEWNAME, MF_GRAYED);
         EnableMenuItem(hMenu, ID_COPYASNEWLANG, MF_GRAYED);
+        EnableMenuItem(hMenu, ID_EXTRACTRC, MF_GRAYED);
         return;
     }
+
+    EnableMenuItem(hMenu, ID_EXTRACTRC, MF_ENABLED);
 
     BOOL bEditable = entry && entry->is_editable();
     if (bEditable)
@@ -4440,10 +5465,6 @@ void MMainWnd::OnInitMenu(HWND hwnd, HMENU hMenu)
         EnableMenuItem(hMenu, ID_TEST, MF_GRAYED);
         EnableMenuItem(hMenu, ID_COPYASNEWNAME, MF_GRAYED);
         EnableMenuItem(hMenu, ID_COPYASNEWLANG, MF_GRAYED);
-        EnableMenuItem(hMenu, ID_FIND, MF_GRAYED);
-        EnableMenuItem(hMenu, ID_FINDUPWARD, MF_GRAYED);
-        EnableMenuItem(hMenu, ID_FINDDOWNWARD, MF_GRAYED);
-        EnableMenuItem(hMenu, ID_REPLACE, MF_GRAYED);
         break;
     case ET_NAME:
         EnableMenuItem(hMenu, ID_REPLACEICON, MF_GRAYED);
@@ -4458,17 +5479,9 @@ void MMainWnd::OnInitMenu(HWND hwnd, HMENU hMenu)
         EnableMenuItem(hMenu, ID_TEST, MF_GRAYED);
         EnableMenuItem(hMenu, ID_COPYASNEWNAME, MF_ENABLED);
         EnableMenuItem(hMenu, ID_COPYASNEWLANG, MF_GRAYED);
-        EnableMenuItem(hMenu, ID_FIND, MF_GRAYED);
-        EnableMenuItem(hMenu, ID_FINDUPWARD, MF_GRAYED);
-        EnableMenuItem(hMenu, ID_FINDDOWNWARD, MF_GRAYED);
-        EnableMenuItem(hMenu, ID_REPLACE, MF_GRAYED);
         break;
 
     case ET_LANG:
-        EnableMenuItem(hMenu, ID_FIND, MF_ENABLED);
-        EnableMenuItem(hMenu, ID_FINDUPWARD, MF_ENABLED);
-        EnableMenuItem(hMenu, ID_FINDDOWNWARD, MF_ENABLED);
-        EnableMenuItem(hMenu, ID_REPLACE, MF_ENABLED);
         if (entry->m_type == RT_GROUP_ICON || entry->m_type == RT_ICON ||
             entry->m_type == RT_ANIICON)
         {
@@ -4548,10 +5561,6 @@ void MMainWnd::OnInitMenu(HWND hwnd, HMENU hMenu)
         EnableMenuItem(hMenu, ID_TEST, MF_GRAYED);
         EnableMenuItem(hMenu, ID_COPYASNEWNAME, MF_GRAYED);
         EnableMenuItem(hMenu, ID_COPYASNEWLANG, MF_ENABLED);
-        EnableMenuItem(hMenu, ID_FIND, MF_ENABLED);
-        EnableMenuItem(hMenu, ID_FINDUPWARD, MF_ENABLED);
-        EnableMenuItem(hMenu, ID_FINDDOWNWARD, MF_ENABLED);
-        EnableMenuItem(hMenu, ID_REPLACE, MF_ENABLED);
         break;
 
     default:
@@ -4566,10 +5575,6 @@ void MMainWnd::OnInitMenu(HWND hwnd, HMENU hMenu)
         EnableMenuItem(hMenu, ID_DELETERES, MF_GRAYED);
         EnableMenuItem(hMenu, ID_COPYASNEWNAME, MF_GRAYED);
         EnableMenuItem(hMenu, ID_COPYASNEWLANG, MF_GRAYED);
-        EnableMenuItem(hMenu, ID_FIND, MF_GRAYED);
-        EnableMenuItem(hMenu, ID_FINDUPWARD, MF_GRAYED);
-        EnableMenuItem(hMenu, ID_FINDDOWNWARD, MF_GRAYED);
-        EnableMenuItem(hMenu, ID_REPLACE, MF_GRAYED);
         break;
     }
 }
@@ -4588,9 +5593,9 @@ void MMainWnd::OnContextMenu(HWND hwnd, HWND hwndContext, UINT xPos, UINT yPos)
     }
 
     // get screen coordinates from xPos and yPos
-    POINT pt = {(INT)xPos, (INT)yPos};
+    POINT pt = {(SHORT)xPos, (SHORT)yPos};
     HTREEITEM hItem;
-    if (xPos == -1 && yPos == -1)
+    if (pt.x == -1 && pt.y == -1)
     {
         // context menu from keyboard
         hItem = TreeView_GetSelection(hwndContext);
@@ -4605,11 +5610,11 @@ void MMainWnd::OnContextMenu(HWND hwnd, HWND hwndContext, UINT xPos, UINT yPos)
         // context menu from mouse
         ScreenToClient(hwndContext, &pt);
 
+        // hit test
         TV_HITTESTINFO HitTest;
         ZeroMemory(&HitTest, sizeof(HitTest));
         HitTest.pt = pt;
         TreeView_HitTest(hwndContext, &HitTest);
-
         hItem = HitTest.hItem;
     }
 
@@ -4656,7 +5661,7 @@ void MMainWnd::PreviewIcon(HWND hwnd, const EntryBase& entry)
     MStringW str;
     HICON hIcon = PackedDIB_CreateIcon(&entry[0], entry.size(), bm, TRUE);
 
-    // dump info to m_hSrcEdit
+    // dump info to m_hCodeEditor
     if (hIcon)
     {
         str = DumpIconInfo(bm, TRUE);
@@ -4665,13 +5670,13 @@ void MMainWnd::PreviewIcon(HWND hwnd, const EntryBase& entry)
     {
         str = DumpBitmapInfo(m_hBmpView.m_hBitmap);
     }
-    SetWindowTextW(m_hSrcEdit, str.c_str());
+    SetWindowTextW(m_hCodeEditor, str.c_str());
 
     // destroy the icon
     DestroyIcon(hIcon);
 
-    // show m_hBmpView
-    ShowBmpView(TRUE);
+    // show
+    SetShowMode(SHOW_CODEANDBMP);
 }
 
 // preview the cursor resource
@@ -4682,15 +5687,15 @@ void MMainWnd::PreviewCursor(HWND hwnd, const EntryBase& entry)
     HCURSOR hCursor = PackedDIB_CreateIcon(&entry[0], entry.size(), bm, FALSE);
     m_hBmpView.SetBitmap(CreateBitmapFromIconDx(hCursor, bm.bmWidth, bm.bmHeight, TRUE));
 
-    // dump info to m_hSrcEdit
+    // dump info to m_hCodeEditor
     MStringW str = DumpIconInfo(bm, FALSE);
-    SetWindowTextW(m_hSrcEdit, str.c_str());
+    SetWindowTextW(m_hCodeEditor, str.c_str());
 
     // destroy the cursor
     DestroyCursor(hCursor);
 
-    // show m_hBmpView
-    ShowBmpView(TRUE);
+    // show
+    SetShowMode(SHOW_CODEANDBMP);
 }
 
 // preview the group icon resource
@@ -4699,13 +5704,13 @@ void MMainWnd::PreviewGroupIcon(HWND hwnd, const EntryBase& entry)
     // create a bitmap object from the entry and set it to m_hBmpView
     m_hBmpView.SetBitmap(CreateBitmapFromIconsDx(hwnd, entry));
 
-    // dump the text to m_hSrcEdit
+    // dump the text to m_hCodeEditor
     ResToText res2text;
     MString str = res2text.DumpEntry(entry);
-    SetWindowTextW(m_hSrcEdit, str.c_str());
+    SetWindowTextW(m_hCodeEditor, str.c_str());
 
-    // show m_hBmpView
-    ShowBmpView(TRUE);
+    // show
+    SetShowMode(SHOW_CODEANDBMP);
 }
 
 // preview the group cursor resource
@@ -4715,13 +5720,13 @@ void MMainWnd::PreviewGroupCursor(HWND hwnd, const EntryBase& entry)
     m_hBmpView.SetBitmap(CreateBitmapFromCursorsDx(hwnd, entry));
     assert(m_hBmpView);
 
-    // dump the text to m_hSrcEdit
+    // dump the text to m_hCodeEditor
     ResToText res2text;
     MString str = res2text.DumpEntry(entry);
-    SetWindowTextW(m_hSrcEdit, str.c_str());
+    SetWindowTextW(m_hCodeEditor, str.c_str());
 
-    // show m_hBmpView
-    ShowBmpView(TRUE);
+    // show
+    SetShowMode(SHOW_CODEANDBMP);
 }
 
 // preview the bitmap resource
@@ -4731,58 +5736,58 @@ void MMainWnd::PreviewBitmap(HWND hwnd, const EntryBase& entry)
     HBITMAP hbm = PackedDIB_CreateBitmapFromMemory(&entry[0], entry.size());
     m_hBmpView.SetBitmap(hbm);
 
-    // dump the text to m_hSrcEdit
+    // dump the text to m_hCodeEditor
     ResToText res2text;
     MString str = res2text.DumpEntry(entry);
-    SetWindowTextW(m_hSrcEdit, str.c_str());
+    SetWindowTextW(m_hCodeEditor, str.c_str());
 
-    // show m_hBmpView
-    ShowBmpView(TRUE);
+    // show
+    SetShowMode(SHOW_CODEANDBMP);
 }
 
 // preview the image resource
 void MMainWnd::PreviewImage(HWND hwnd, const EntryBase& entry)
 {
-    // dump the text to m_hSrcEdit
+    // dump the text to m_hCodeEditor
     ResToText res2text;
     MStringW str = res2text.DumpEntry(entry);
-    SetWindowTextW(m_hSrcEdit, str.c_str());
+    SetWindowTextW(m_hCodeEditor, str.c_str());
 
     // set the entry image to m_hBmpView
     m_hBmpView.SetImage(&entry[0], entry.size());
 
-    // show m_hBmpView
-    ShowBmpView(TRUE);
+    // show
+    SetShowMode(SHOW_CODEANDBMP);
 }
 
 // preview the WAVE resource
 void MMainWnd::PreviewWAVE(HWND hwnd, const EntryBase& entry)
 {
-    // dump the text to m_hSrcEdit
+    // dump the text to m_hCodeEditor
     ResToText res2text;
     MString str = res2text.DumpEntry(entry);
-    SetWindowTextW(m_hSrcEdit, str.c_str());
+    SetWindowTextW(m_hCodeEditor, str.c_str());
 
     // make it playable
     m_hBmpView.SetPlay();
 
-    // show m_hBmpView
-    ShowBmpView(TRUE);
+    // show
+    SetShowMode(SHOW_CODEANDBMP);
 }
 
 // preview the AVI resource
 void MMainWnd::PreviewAVI(HWND hwnd, const EntryBase& entry)
 {
-    // dump the text to m_hSrcEdit
+    // dump the text to m_hCodeEditor
     ResToText res2text;
     MString str = res2text.DumpEntry(entry);
-    SetWindowTextW(m_hSrcEdit, str.c_str());
+    SetWindowTextW(m_hCodeEditor, str.c_str());
 
     // set the AVI
     m_hBmpView.SetMedia(&entry[0], entry.size());
 
-    // show m_hBmpView
-    ShowMovie(TRUE);
+    // show movie
+    SetShowMode(SHOW_MOVIE);
 }
 
 // preview the RT_ACCELERATOR resource
@@ -4793,10 +5798,10 @@ void MMainWnd::PreviewAccel(HWND hwnd, const EntryBase& entry)
     MByteStreamEx stream(entry.m_data);
     if (accel.LoadFromStream(stream))
     {
-        // dump the text to m_hSrcEdit
+        // dump the text to m_hCodeEditor
         MString str = GetLanguageStatement(entry.m_lang);
         str += accel.Dump(entry.m_name);
-        SetWindowTextW(m_hSrcEdit, str.c_str());
+        SetWindowTextW(m_hCodeEditor, str.c_str());
     }
 }
 
@@ -4809,9 +5814,9 @@ void MMainWnd::PreviewMessage(HWND hwnd, const EntryBase& entry)
     WORD nNameID = entry.m_name.m_id;
     if (mes.LoadFromStream(stream, nNameID))
     {
-        // dump the text to m_hSrcEdit
+        // dump the text to m_hCodeEditor
         MStringW str = mes.Dump(nNameID);
-        SetWindowTextW(m_hSrcEdit, str.c_str());
+        SetWindowTextW(m_hCodeEditor, str.c_str());
     }
 }
 
@@ -4824,9 +5829,9 @@ void MMainWnd::PreviewString(HWND hwnd, const EntryBase& entry)
     WORD nNameID = entry.m_name.m_id;
     if (str_res.LoadFromStream(stream, nNameID))
     {
-        // dump the text to m_hSrcEdit
+        // dump the text to m_hCodeEditor
         MStringW str = str_res.Dump(nNameID);
-        SetWindowTextW(m_hSrcEdit, str.c_str());
+        SetWindowTextW(m_hCodeEditor, str.c_str());
     }
 }
 
@@ -4840,8 +5845,8 @@ void MMainWnd::PreviewHtml(HWND hwnd, const EntryBase& entry)
     if (entry.size())
         str = mstr_from_bin(&entry.m_data[0], entry.m_data.size(), &type);
 
-    // dump the text to m_hSrcEdit
-    SetWindowTextW(m_hSrcEdit, str.c_str());
+    // dump the text to m_hCodeEditor
+    SetWindowTextW(m_hCodeEditor, str.c_str());
 }
 
 // preview the menu resource
@@ -4852,10 +5857,10 @@ void MMainWnd::PreviewMenu(HWND hwnd, const EntryBase& entry)
     MByteStreamEx stream(entry.m_data);
     if (menu_res.LoadFromStream(stream))
     {
-        // dump the text to m_hSrcEdit
+        // dump the text to m_hCodeEditor
         MString str = GetLanguageStatement(entry.m_lang);
         str += menu_res.Dump(entry.m_name);
-        SetWindowTextW(m_hSrcEdit, str.c_str());
+        SetWindowTextW(m_hCodeEditor, str.c_str());
     }
 }
 
@@ -4866,38 +5871,50 @@ void MMainWnd::PreviewVersion(HWND hwnd, const EntryBase& entry)
     VersionRes ver_res;
     if (ver_res.LoadFromData(entry.m_data))
     {
-        // dump the text to m_hSrcEdit
+        // dump the text to m_hCodeEditor
         MString str = GetLanguageStatement(entry.m_lang);
         str += ver_res.Dump(entry.m_name);
-        SetWindowTextW(m_hSrcEdit, str.c_str());
+        SetWindowTextW(m_hCodeEditor, str.c_str());
     }
 }
 
 // preview the unknown resource
 void MMainWnd::PreviewUnknown(HWND hwnd, const EntryBase& entry)
 {
-    // dump the text to m_hSrcEdit
+    // dump the text to m_hCodeEditor
     ResToText res2text;
     MString str = res2text.DumpEntry(entry);
-    SetWindowTextW(m_hSrcEdit, str.c_str());
+    SetWindowTextW(m_hCodeEditor, str.c_str());
+}
+
+void MMainWnd::PreviewTypeLib(HWND hwnd, const EntryBase& entry)
+{
+    // dump the text to m_hCodeEditor
+    ResToText res2text;
+    res2text.m_hwnd = m_hwnd;
+    res2text.m_bHumanReadable = TRUE;
+    MString str = res2text.DumpEntry(entry);
+    SetWindowTextW(m_hCodeEditor, str.c_str());
 }
 
 // preview the RT_RCDATA resource
 void MMainWnd::PreviewRCData(HWND hwnd, const EntryBase& entry)
 {
-    // dump the text to m_hSrcEdit
+    // dump the text to m_hCodeEditor
     ResToText res2text;
+    res2text.m_hwnd = m_hwnd;
+    res2text.m_bHumanReadable = TRUE;
     MString str = res2text.DumpEntry(entry);
-    SetWindowTextW(m_hSrcEdit, str.c_str());
+    SetWindowTextW(m_hCodeEditor, str.c_str());
 }
 
 // preview the DLGINIT resource
 void MMainWnd::PreviewDlgInit(HWND hwnd, const EntryBase& entry)
 {
-    // dump the text to m_hSrcEdit
+    // dump the text to m_hCodeEditor
     ResToText res2text;
     MString str = res2text.DumpEntry(entry);
-    SetWindowTextW(m_hSrcEdit, str.c_str());
+    SetWindowTextW(m_hCodeEditor, str.c_str());
 }
 
 // preview the dialog template resource
@@ -4908,10 +5925,10 @@ void MMainWnd::PreviewDialog(HWND hwnd, const EntryBase& entry)
     MByteStreamEx stream(entry.m_data);
     if (dialog_res.LoadFromStream(stream))
     {
-        // dump the text to m_hSrcEdit
+        // dump the text to m_hCodeEditor
         MString str = GetLanguageStatement(entry.m_lang);
         str += dialog_res.Dump(entry.m_name, !!g_settings.bAlwaysControl);
-        SetWindowTextW(m_hSrcEdit, str.c_str());
+        SetWindowTextW(m_hCodeEditor, str.c_str());
     }
 }
 
@@ -4932,7 +5949,6 @@ void MMainWnd::PreviewAniIcon(HWND hwnd, const EntryBase& entry, BOOL bIcon)
         {
             file.FlushFileBuffers();    // flush
             file.CloseHandle();         // close the handle
-            Sleep(FILE_WAIT_TIME);      // wait for the file operation
 
             if (bIcon)
             {
@@ -4954,20 +5970,25 @@ void MMainWnd::PreviewAniIcon(HWND hwnd, const EntryBase& entry, BOOL bIcon)
 
         ResToText res2text;
         MString str = res2text.DumpEntry(entry);
-        SetWindowTextW(m_hSrcEdit, str.c_str());
+        SetWindowTextW(m_hCodeEditor, str.c_str());
     }
     else
     {
         m_hBmpView.DestroyView();
     }
-    ShowBmpView(TRUE);
+
+    // show
+    SetShowMode(SHOW_CODEANDBMP);
+
+    // show
+    SetShowMode(SHOW_CODEANDBMP);
 }
 
 // preview the string table resource
 void MMainWnd::PreviewStringTable(HWND hwnd, const EntryBase& entry)
 {
     // search the strings
-    EntrySetBase found;
+    EntrySet found;
     g_res.search(found, ET_LANG, RT_STRING, (WORD)0, entry.m_lang);
 
     // found --> str_res
@@ -4979,17 +6000,20 @@ void MMainWnd::PreviewStringTable(HWND hwnd, const EntryBase& entry)
             return;
     }
 
-    // dump the text to m_hSrcEdit
+    // dump the text to m_hCodeEditor
     MString str = GetLanguageStatement(entry.m_lang);
     str += str_res.Dump();
-    SetWindowTextW(m_hSrcEdit, str.c_str());
+    SetWindowTextW(m_hCodeEditor, str.c_str());
+
+    // show code only
+    SetShowMode(SHOW_CODEONLY);
 }
 
 // preview the message table resource
 void MMainWnd::PreviewMessageTable(HWND hwnd, const EntryBase& entry)
 {
     // search the message tables
-    EntrySetBase found;
+    EntrySet found;
     g_res.search(found, ET_LANG, RT_MESSAGETABLE, (WORD)0, entry.m_lang);
 
     // found --> msg_res
@@ -5001,7 +6025,7 @@ void MMainWnd::PreviewMessageTable(HWND hwnd, const EntryBase& entry)
             return;
     }
 
-    // dump the text to m_hSrcEdit
+    // dump the text to m_hCodeEditor
     MString str;
     str += GetLanguageStatement(entry.m_lang);
     str += L"#ifdef APSTUDIO_INVOKED\r\n";
@@ -5010,11 +6034,14 @@ void MMainWnd::PreviewMessageTable(HWND hwnd, const EntryBase& entry)
     str += L"#ifdef MCDX_INVOKED\r\n";
     str += msg_res.Dump();
     str += L"#endif\r\n\r\n";
-    SetWindowTextW(m_hSrcEdit, str.c_str());
+    SetWindowTextW(m_hCodeEditor, str.c_str());
+
+    // show code only
+    SetShowMode(SHOW_CODEONLY);
 }
 
 // close the preview
-VOID MMainWnd::HidePreview()
+VOID MMainWnd::HidePreview(STV stv)
 {
     // destroy the RADical window if any
     if (IsWindow(m_rad_window))
@@ -5022,31 +6049,45 @@ VOID MMainWnd::HidePreview()
         DestroyWindow(m_rad_window);
     }
 
-    // clear m_hBinEdit
-    SetWindowTextW(m_hBinEdit, NULL);
-    Edit_SetModify(m_hBinEdit, FALSE);
+    // clear m_hHexViewer
+    SetWindowTextW(m_hHexViewer, NULL);
+    Edit_SetModify(m_hHexViewer, FALSE);
 
-    // clear m_hSrcEdit
-    SetWindowTextW(m_hSrcEdit, NULL);
-    Edit_SetModify(m_hSrcEdit, FALSE);
+    // clear m_hCodeEditor
+    if (stv == STV_RESETTEXT || stv == STV_RESETTEXTANDMODIFIED)
+    {
+        SetWindowTextW(m_hCodeEditor, NULL);
+    }
+    if (stv != STV_DONTRESET)
+    {
+        Edit_SetModify(m_hCodeEditor, FALSE);
+    }
 
     // close and hide m_hBmpView
     m_hBmpView.DestroyView();
-    ShowBmpView(FALSE);
+
+    // Code Viewer only
+    SetShowMode(SHOW_CODEONLY);
 
     // recalculate the splitter
     PostMessageDx(WM_SIZE);
 }
 
 // do preview the resource item
-BOOL MMainWnd::Preview(HWND hwnd, const EntryBase *entry)
+BOOL MMainWnd::Preview(HWND hwnd, const EntryBase *entry, STV stv)
 {
     // close the preview
-    HidePreview();
+    HidePreview(stv);
+
+    if (stv == STV_DONTRESET)
+        return IsEntryTextEditable(entry);
 
     // show the binary
     MStringW str = DumpBinaryAsText(entry->m_data);
-    SetWindowTextW(m_hBinEdit, str.c_str());
+    SetWindowTextW(m_hHexViewer, str.c_str());
+
+    // code only
+    SetShowMode(SHOW_CODEONLY);
 
     // do preview the resource item
     if (entry->m_type.m_id != 0)
@@ -5127,6 +6168,7 @@ BOOL MMainWnd::Preview(HWND hwnd, const EntryBase *entry)
             entry->m_type == L"JPEG" || entry->m_type == L"TIFF" ||
             entry->m_type == L"JPG" || entry->m_type == L"TIF" ||
             entry->m_type == L"EMF" || entry->m_type == L"ENHMETAFILE" ||
+            entry->m_type == L"ENHMETAPICT" ||
             entry->m_type == L"WMF" || entry->m_type == L"IMAGE")
         {
             PreviewImage(hwnd, *entry);
@@ -5138,6 +6180,10 @@ BOOL MMainWnd::Preview(HWND hwnd, const EntryBase *entry)
         else if (entry->m_type == L"AVI")
         {
             PreviewAVI(hwnd, *entry);
+        }
+        else if (entry->m_type == L"TYPELIB")
+        {
+            PreviewTypeLib(hwnd, *entry);
         }
         else
         {
@@ -5185,13 +6231,13 @@ void MMainWnd::UpdateToolBarStatus()
     {
         SendMessageW(m_hToolBar, TB_SETSTATE, ID_EXPAND_ALL, 0);
         SendMessageW(m_hToolBar, TB_SETSTATE, ID_COLLAPSE_ALL, 0);
-        SendMessageW(m_hToolBar, TB_SETSTATE, ID_EXTRACTBANG, 0);
+        SendMessageW(m_hToolBar, TB_SETSTATE, ID_EXPORTRES, 0);
     }
     else
     {
         SendMessageW(m_hToolBar, TB_SETSTATE, ID_EXPAND_ALL, TBSTATE_ENABLED);
         SendMessageW(m_hToolBar, TB_SETSTATE, ID_COLLAPSE_ALL, TBSTATE_ENABLED);
-        SendMessageW(m_hToolBar, TB_SETSTATE, ID_EXTRACTBANG, TBSTATE_ENABLED);
+        SendMessageW(m_hToolBar, TB_SETSTATE, ID_EXPORTRES, TBSTATE_ENABLED);
     }
 
     BOOL bCanEditLabel = TRUE;
@@ -5336,24 +6382,27 @@ void MMainWnd::UpdateOurToolBarButtons(INT iType)
 // select an item in the tree control
 void
 MMainWnd::SelectTV(EntryType et, const MIdOrString& type,
-                   const MIdOrString& name, WORD lang, BOOL bDoubleClick)
+                   const MIdOrString& name, WORD lang,
+                   BOOL bDoubleClick, STV stv)
 {
     // close the preview
-    HidePreview();
+    HidePreview(stv);
 
     // find the entry
     if (auto entry = g_res.find(et, type, name, lang))
     {
         // select it
-        SelectTV(entry, bDoubleClick);
+        SelectTV(entry, bDoubleClick, stv);
     }
 }
 
 // select an item in the tree control
-void MMainWnd::SelectTV(EntryBase *entry, BOOL bDoubleClick)
+void MMainWnd::SelectTV(EntryBase *entry, BOOL bDoubleClick, STV stv)
 {
+    BOOL bModified = Edit_GetModify(m_hCodeEditor);
+
     // close the preview
-    HidePreview();
+    HidePreview(stv);
 
     if (!entry)     // not selected
     {
@@ -5361,28 +6410,29 @@ void MMainWnd::SelectTV(EntryBase *entry, BOOL bDoubleClick)
         return;
     }
 
-    // expand the parent and ensure visible
-    auto parent = g_res.get_parent(entry);
-    while (parent && parent->m_hItem)
+    if (stv != STV_DONTRESET)
     {
-        TreeView_Expand(m_hwndTV, parent->m_hItem, TVE_EXPAND);
-        parent = g_res.get_parent(parent);
+        // expand the parent and ensure visible
+        auto parent = g_res.get_parent(entry);
+        while (parent && parent->m_hItem)
+        {
+            TreeView_Expand(m_hwndTV, parent->m_hItem, TVE_EXPAND);
+            parent = g_res.get_parent(parent);
+        }
+        TreeView_SelectItem(m_hwndTV, entry->m_hItem);
+        TreeView_EnsureVisible(m_hwndTV, entry->m_hItem);
     }
-    TreeView_SelectItem(m_hwndTV, entry->m_hItem);
-    TreeView_EnsureVisible(m_hwndTV, entry->m_hItem);
 
     m_type = entry->m_type;
     m_name = entry->m_name;
     m_lang = entry->m_lang;
 
-    BOOL bEditable, bSelectNone = FALSE;
+    BOOL bEditable;
     switch (entry->m_et)
     {
     case ET_LANG:
         // do preview
-        bEditable = Preview(m_hwnd, entry);
-        // show the binary EDIT control
-        ShowBinEdit(TRUE);
+        bEditable = Preview(m_hwnd, entry, stv);
         break;
 
     case ET_STRING:
@@ -5390,12 +6440,14 @@ void MMainWnd::SelectTV(EntryBase *entry, BOOL bDoubleClick)
         m_hBmpView.DestroyView();
         m_hBmpView.DeleteTempFile();
 
-        // show the string table
-        PreviewStringTable(m_hwnd, *entry);
+        if (stv != STV_DONTRESET)
+        {
+            // show the string table
+            PreviewStringTable(m_hwnd, *entry);
+        }
 
         // hide the binary EDIT control
-        SetWindowTextW(m_hBinEdit, NULL);
-        ShowBinEdit(FALSE);
+        SetWindowTextW(m_hHexViewer, NULL);
 
         // it's editable
         bEditable = TRUE;
@@ -5406,12 +6458,14 @@ void MMainWnd::SelectTV(EntryBase *entry, BOOL bDoubleClick)
         m_hBmpView.DestroyView();
         m_hBmpView.DeleteTempFile();
 
-        // show the message table
-        PreviewMessageTable(m_hwnd, *entry);
+        if (stv != STV_DONTRESET)
+        {
+            // show the message table
+            PreviewMessageTable(m_hwnd, *entry);
+        }
 
         // hide the binary EDIT control
-        SetWindowTextW(m_hBinEdit, NULL);
-        ShowBinEdit(FALSE);
+        SetWindowTextW(m_hHexViewer, NULL);
 
         // it's editable
         bEditable = TRUE;
@@ -5424,23 +6478,28 @@ void MMainWnd::SelectTV(EntryBase *entry, BOOL bDoubleClick)
         m_hBmpView.DeleteTempFile();
 
         // hide the binary EDIT control
-        SetWindowTextW(m_hBinEdit, NULL);
-        ShowBinEdit(FALSE);
+        SetWindowTextW(m_hHexViewer, NULL);
 
         // it's non editable
         bEditable = FALSE;
 
-        // select none
-        bSelectNone = TRUE;
+        // update show mode
+        SetShowMode(SHOW_CODEONLY);
+    }
+
+    if (stv == STV_DONTRESET || stv == STV_RESETTEXT)
+    {
+        // restore the modified flag
+        Edit_SetModify(m_hCodeEditor, bModified);
     }
 
     if (bEditable)  // editable
     {
         // make it not read-only
-        Edit_SetReadOnly(m_hSrcEdit, FALSE);
+        Edit_SetReadOnly(m_hCodeEditor, FALSE);
 
         // update the toolbar
-        if (Edit_GetModify(m_hSrcEdit))
+        if (Edit_GetModify(m_hCodeEditor))
         {
             UpdateOurToolBarButtons(2);
         }
@@ -5460,11 +6519,14 @@ void MMainWnd::SelectTV(EntryBase *entry, BOOL bDoubleClick)
     else
     {
         // make it read-only
-        Edit_SetReadOnly(m_hSrcEdit, TRUE);
+        Edit_SetReadOnly(m_hCodeEditor, TRUE);
 
         // update the toolbar
         UpdateOurToolBarButtons(3);
     }
+
+    // update show
+    SetShowMode(m_nShowMode);
 
     // recalculate the splitter
     PostMessageDx(WM_SIZE);
@@ -5500,8 +6562,40 @@ MStringW MMainWnd::GetIncludesDump() const
         if (str.empty())
             continue;
 
-        ret += L" -I";
+        ret += L" \"-I";
         ret += str;
+        ret += L"\"";
+    }
+    if (m_szIncludeDir[0])
+    {
+        ret += L" \"-I";
+        ret += m_szIncludeDir;
+        ret += L"\"";
+    }
+    ret += L" ";
+    return ret;
+}
+
+// dump all the #include's
+MStringW MMainWnd::GetIncludesDumpForWindres() const
+{
+    MStringW ret;
+    for (auto& path : g_settings.includes)
+    {
+        // " -Ipath"
+        auto& str = path;
+        if (str.empty())
+            continue;
+
+        ret += L" -I \"";
+        ret += str;
+        ret += L"\"";
+    }
+    if (m_szIncludeDir[0])
+    {
+        ret += L" -I \"";
+        ret += m_szIncludeDir;
+        ret += L"\"";
     }
     ret += L" ";
     return ret;
@@ -5558,6 +6652,7 @@ BOOL MMainWnd::CompileStringTable(MStringA& strOutput, const MIdOrString& name, 
     DWORD cbWrite = DWORD(strUtf8.size() * sizeof(char));
     DWORD cbWritten;
     r2.WriteFile(strUtf8.c_str(), cbWrite, &cbWritten);
+    r2.FlushFileBuffers();
     r2.CloseHandle();   // close the handle
 
     // build the command line text
@@ -5566,20 +6661,17 @@ BOOL MMainWnd::CompileStringTable(MStringA& strOutput, const MIdOrString& name, 
     strCmdLine += m_szWindresExe;
     strCmdLine += L"\" -DRC_INVOKED ";
     strCmdLine += GetMacroDump();
-    strCmdLine += GetIncludesDump();
+    strCmdLine += GetIncludesDumpForWindres();
     strCmdLine += L" -o \"";
     strCmdLine += szPath3;
-    strCmdLine += L"\" -J rc -O res -F pe-i386 --preprocessor=\"";
-    strCmdLine += m_szCppExe;
-    strCmdLine += L"\" --preprocessor-arg=\"\" \"";
+    strCmdLine += L"\" -J rc -O res -F pe-i386 \"--preprocessor=";
+    strCmdLine += m_szMCppExe;
+    strCmdLine += L"\" \"";
     strCmdLine += szPath1;
     strCmdLine += '\"';
-    //MessageBoxW(hwnd, strCmdLine.c_str(), NULL, 0);
+    //MessageBoxW(m_hwnd, strCmdLine.c_str(), NULL, 0);
 
     BOOL bOK = FALSE;
-
-    // wait for the file operation
-    Sleep(FILE_WAIT_TIME);
 
     // create a windres.exe process
     MProcessMaker pmaker;
@@ -5597,9 +6689,6 @@ BOOL MMainWnd::CompileStringTable(MStringA& strOutput, const MIdOrString& name, 
         if (pmaker.GetExitCode() == 0 && bOK)
         {
             bOK = FALSE;
-
-            // wait for the file operation
-            Sleep(FILE_WAIT_TIME);
 
             // import res
             EntrySet res;
@@ -5650,7 +6739,72 @@ BOOL MMainWnd::CompileStringTable(MStringA& strOutput, const MIdOrString& name, 
     // recalculate the splitter
     PostMessageDx(WM_SIZE);
 
+    if (bOK)
+        DoSetFileModified(TRUE);
     return bOK;
+}
+
+BOOL MMainWnd::CompileTYPELIB(MStringA& strOutput, const MIdOrString& name, WORD lang, const MStringW& strWide)
+{
+    MWideToAnsi w2a(CP_ACP, LoadStringDx(IDS_COMPILEERROR));
+    strOutput = w2a.c_str();
+    return FALSE;
+}
+
+BOOL MMainWnd::CompileRCData(MStringA& strOutput, const MIdOrString& name, WORD lang, const MStringW& strWide)
+{
+    EntryBase *entry = g_res.find(ET_LANG, RT_RCDATA, name, lang);
+    if (!entry || !entry->is_delphi_dfm())
+        return FALSE;
+
+    MWideToAnsi w2a(CP_UTF8, strWide.c_str());
+    MStringA ansi(w2a.c_str());
+
+    // remove "//-" ... "-//"
+    for (;;)
+    {
+        auto i = ansi.find("//-");
+        if (i == MStringA::npos)
+            break;
+        auto j = ansi.find("-//", i);
+        auto k = ansi.find("\n", i);
+        if (j != MStringA::npos && k != MStringA::npos)
+        {
+            if (j < k)
+                ansi.erase(i, j - i + 3);
+            else
+                ansi.erase(i, k - i);
+        }
+        else if (j != MStringA::npos)
+        {
+            ansi.erase(i, j - i + 3);
+        }
+        else if (k != MStringA::npos)
+        {
+            ansi.erase(i, k - i);
+        }
+        else
+        {
+            ansi.erase(0, i);
+            break;
+        }
+    }
+
+    EntryBase::data_type data =
+        dfm_binary_from_text(m_szDFMSC, ansi.c_str(),
+                             g_settings.nDfmCodePage, g_settings.bDfmNoUnicode);
+    auto text = dfm_text_from_binary(m_szDFMSC, data.data(), data.size(),
+                                     g_settings.nDfmCodePage, g_settings.bDfmRawTextComments);
+    if (text.empty())
+    {
+        MWideToAnsi w2a(CP_ACP, LoadStringDx(IDS_COMPILEERROR));
+        strOutput = w2a.c_str();
+        return FALSE;
+    }
+
+    entry->m_data = data;
+    DoSetFileModified(TRUE);
+    return TRUE;
 }
 
 // compile the message table
@@ -5699,17 +6853,16 @@ BOOL MMainWnd::CompileMessageTable(MStringA& strOutput, const MIdOrString& name,
     strCmdLine += L"\" ";
     strCmdLine += GetMacroDump();
     strCmdLine += GetIncludesDump();
-    strCmdLine += L" -o \"";
+    strCmdLine += L" \"--preprocessor=";
+    strCmdLine += m_szMCppExe;
+    strCmdLine += L"\" -o \"";
     strCmdLine += szPath3;
     strCmdLine += L"\" -J rc -O res \"";
     strCmdLine += szPath1;
     strCmdLine += L'\"';
-    //MessageBoxW(hwnd, strCmdLine.c_str(), NULL, 0);
+    //MessageBoxW(NULL, strCmdLine.c_str(), NULL, 0);
 
     BOOL bOK = FALSE;
-
-    // wait for the file operation
-    Sleep(FILE_WAIT_TIME);
 
     // create the mcdx.exe process
     MProcessMaker pmaker;
@@ -5727,9 +6880,6 @@ BOOL MMainWnd::CompileMessageTable(MStringA& strOutput, const MIdOrString& name,
         if (pmaker.GetExitCode() == 0 && bOK)
         {
             bOK = FALSE;
-
-            // wait for the file operation
-            Sleep(FILE_WAIT_TIME);
 
             // import res
             EntrySet res;
@@ -5781,6 +6931,9 @@ BOOL MMainWnd::CompileMessageTable(MStringA& strOutput, const MIdOrString& name,
     // recalculate the splitter
     PostMessageDx(WM_SIZE);
 
+    if (bOK)
+        DoSetFileModified(TRUE);
+
     return bOK;
 }
 
@@ -5795,6 +6948,14 @@ BOOL MMainWnd::CompileParts(MStringA& strOutput, const MIdOrString& type, const 
     if (type == RT_MESSAGETABLE)
     {
         return CompileMessageTable(strOutput, name, lang, strWide);
+    }
+    if (type == RT_RCDATA)
+    {
+        return CompileRCData(strOutput, name, lang, strWide);
+    }
+    if (type == L"TYPELIB")
+    {
+        return CompileTYPELIB(strOutput, name, lang, strWide);
     }
 
     // add a UTF-8 BOM to data
@@ -5862,6 +7023,8 @@ BOOL MMainWnd::CompileParts(MStringA& strOutput, const MIdOrString& type, const 
         // select the added entry
         SelectTV(entry, FALSE);
 
+        DoSetFileModified(TRUE);
+
         return TRUE;    // success
     }
 
@@ -5883,33 +7046,23 @@ BOOL MMainWnd::CompileParts(MStringA& strOutput, const MIdOrString& type, const 
     // dump the head to Source file #1
     if (m_szResourceH[0])
         r1.WriteFormatA("#include \"%s\"\r\n", MWideToAnsi(CP_ACP, m_szResourceH).c_str());
-    r1.WriteFormatA("#include <windows.h>\r\n");
-    r1.WriteFormatA("#include <commctrl.h>\r\n");
+    r1.WriteSzA("#include <windows.h>\r\n");
+    r1.WriteSzA("#include <commctrl.h>\r\n");
     r1.WriteFormatA("LANGUAGE 0x%04X, 0x%04X\r\n", PRIMARYLANGID(lang), SUBLANGID(m_lang));
-    r1.WriteFormatA("#pragma code_page(65001) // UTF-8\r\n");
-
-    // dump the macros
-    for (auto& pair : g_settings.id_map)
-    {
-        if (pair.first == "IDC_STATIC")
-        {
-            r1.WriteFormatA("#undef IDC_STATIC\r\n");
-            r1.WriteFormatA("#define IDC_STATIC -1\r\n");
-        }
-        else
-        {
-            r1.WriteFormatA("#undef %s\r\n", pair.first.c_str());
-            r1.WriteFormatA("#define %s %s\r\n", pair.first.c_str(), pair.second.c_str());
-        }
-    }
+    r1.WriteSzA("#pragma code_page(65001) // UTF-8\r\n\r\n");
+    r1.WriteSzA("#ifndef IDC_STATIC\r\n");
+    r1.WriteSzA("    #define IDC_STATIC (-1)\r\n");
+    r1.WriteSzA("#endif\r\n\r\n");
 
     r1.WriteFormatA("#include \"%S\"\r\n", szPath2);
+    r1.FlushFileBuffers();
     r1.CloseHandle();   // close the handle
 
     // write the UTF-8 file to Source file #2
     DWORD cbWrite = DWORD(strUtf8.size() * sizeof(char));
     DWORD cbWritten;
     r2.WriteFile(strUtf8.c_str(), cbWrite, &cbWritten);
+    r2.FlushFileBuffers();
     r2.CloseHandle();   // close the handle
 
     // build the command line text
@@ -5918,20 +7071,17 @@ BOOL MMainWnd::CompileParts(MStringA& strOutput, const MIdOrString& type, const 
     strCmdLine += m_szWindresExe;
     strCmdLine += L"\" -DRC_INVOKED ";
     strCmdLine += GetMacroDump();
-    strCmdLine += GetIncludesDump();
+    strCmdLine += GetIncludesDumpForWindres();
     strCmdLine += L" -o \"";
     strCmdLine += szPath3;
-    strCmdLine += L"\" -J rc -O res -F pe-i386 --preprocessor=\"";
-    strCmdLine += m_szCppExe;
-    strCmdLine += L"\" --preprocessor-arg=\"\" \"";
+    strCmdLine += L"\" -J rc -O res -F pe-i386 \"--preprocessor=";
+    strCmdLine += m_szMCppExe;
+    strCmdLine += L"\" \"";
     strCmdLine += szPath1;
     strCmdLine += '\"';
     //MessageBoxW(hwnd, strCmdLine.c_str(), NULL, 0);
 
     BOOL bOK = FALSE;
-
-    // wait for the file operation
-    Sleep(FILE_WAIT_TIME);
 
     // create a windres.exe process
     MProcessMaker pmaker;
@@ -5950,9 +7100,6 @@ BOOL MMainWnd::CompileParts(MStringA& strOutput, const MIdOrString& type, const 
         if (pmaker.GetExitCode() == 0 && bOK)
         {
             bOK = FALSE;
-
-            // wait for the file operation
-            Sleep(FILE_WAIT_TIME);
 
             // import res
             EntrySet res;
@@ -6013,6 +7160,8 @@ BOOL MMainWnd::CompileParts(MStringA& strOutput, const MIdOrString& type, const 
         {
             PostMessageDx(MYWM_REOPENRAD);
         }
+
+        DoSetFileModified(TRUE);
     }
 
     // recalculate the splitter
@@ -6025,7 +7174,7 @@ BOOL MMainWnd::CompileParts(MStringA& strOutput, const MIdOrString& type, const 
 // reopen if necessary
 BOOL MMainWnd::ReCompileOnSelChange(BOOL bReopen/* = FALSE*/)
 {
-    MStringW strWide = GetWindowTextW(m_hSrcEdit);
+    MStringW strWide = GetWindowTextW(m_hCodeEditor);
 
     // get the selected entry
     auto entry = g_res.get_entry();
@@ -6036,12 +7185,17 @@ BOOL MMainWnd::ReCompileOnSelChange(BOOL bReopen/* = FALSE*/)
     MStringA strOutput;
     if (!CompileParts(strOutput, entry->m_type, entry->m_name, entry->m_lang, strWide))
     {
+        // compilation failed
+        m_nStatusStringID = IDS_RECOMPILEFAILED;
         SetErrorMessage(strOutput);
         return FALSE;   // failure
     }
 
+    // compilation OK
+    m_nStatusStringID = IDS_RECOMPILEOK;
+
     // compiled. clear the modification flag
-    Edit_SetModify(m_hSrcEdit, FALSE);
+    Edit_SetModify(m_hCodeEditor, FALSE);
 
     // destroy the RADical window if any
     if (IsWindow(m_rad_window))
@@ -6071,7 +7225,7 @@ BOOL MMainWnd::ReCompileOnSelChange(BOOL bReopen/* = FALSE*/)
 // compile the source if necessary
 BOOL MMainWnd::CompileIfNecessary(BOOL bReopen/* = FALSE*/)
 {
-    if (Edit_GetModify(m_hSrcEdit))
+    if (Edit_GetModify(m_hCodeEditor))
     {
         // the modification flag is set. query to compile
         INT id = MsgBoxDx(IDS_COMPILENOW, MB_ICONINFORMATION | MB_YESNOCANCEL);
@@ -6083,7 +7237,7 @@ BOOL MMainWnd::CompileIfNecessary(BOOL bReopen/* = FALSE*/)
 
         case IDNO:
             // clear the modification flag
-            Edit_SetModify(m_hSrcEdit, FALSE);
+            Edit_SetModify(m_hCodeEditor, FALSE);
 
             // destroy the RADical window if any
             if (IsWindow(m_rad_window))
@@ -6115,19 +7269,19 @@ BOOL MMainWnd::CheckDataFolder(VOID)
     // find the data folder
     size_t diff = pch - szPath;
     StringCchCopyW(pch, diff, L"\\data");
-    if (::GetFileAttributesW(szPath) == INVALID_FILE_ATTRIBUTES)
+    if (!PathFileExistsW(szPath))
     {
         StringCchCopyW(pch, diff, L"\\..\\data");
-        if (::GetFileAttributesW(szPath) == INVALID_FILE_ATTRIBUTES)
+        if (!PathFileExistsW(szPath))
         {
             StringCchCopyW(pch, diff, L"\\..\\..\\data");
-            if (::GetFileAttributesW(szPath) == INVALID_FILE_ATTRIBUTES)
+            if (!PathFileExistsW(szPath))
             {
                 StringCchCopyW(pch, diff, L"\\..\\..\\..\\data");
-                if (::GetFileAttributesW(szPath) == INVALID_FILE_ATTRIBUTES)
+                if (!PathFileExistsW(szPath))
                 {
                     StringCchCopyW(pch, diff, L"\\..\\..\\..\\..\\data");
-                    if (::GetFileAttributesW(szPath) == INVALID_FILE_ATTRIBUTES)
+                    if (!PathFileExistsW(szPath))
                     {
                         return FALSE;   // not found
                     }
@@ -6171,20 +7325,21 @@ INT MMainWnd::CheckData(VOID)
         ErrorBoxDx(TEXT("ERROR: Unable to load Constants.txt file."));
         return -2;  // failure
     }
+    g_db.m_map[L"CTRLID"].emplace_back(L"IDC_STATIC", (WORD)-1);
 
-    // cpp.exe
-    StringCchCopyW(m_szCppExe, _countof(m_szCppExe), m_szDataFolder);
-    StringCchCatW(m_szCppExe, _countof(m_szCppExe), L"\\bin\\cpp.exe");
-    if (::GetFileAttributesW(m_szCppExe) == INVALID_FILE_ATTRIBUTES)
+    // mcpp.exe
+    StringCchCopyW(m_szMCppExe, _countof(m_szMCppExe), m_szDataFolder);
+    StringCchCatW(m_szMCppExe, _countof(m_szMCppExe), L"\\bin\\mcpp.exe");
+    if (!PathFileExistsW(m_szMCppExe))
     {
-        ErrorBoxDx(TEXT("ERROR: No cpp.exe found."));
+        ErrorBoxDx(TEXT("ERROR: No mcpp.exe found."));
         return -3;  // failure
     }
 
     // windres.exe
     StringCchCopyW(m_szWindresExe, _countof(m_szWindresExe), m_szDataFolder);
     StringCchCatW(m_szWindresExe, _countof(m_szWindresExe), L"\\bin\\windres.exe");
-    if (::GetFileAttributesW(m_szWindresExe) == INVALID_FILE_ATTRIBUTES)
+    if (!PathFileExistsW(m_szWindresExe))
     {
         ErrorBoxDx(TEXT("ERROR: No windres.exe found."));
         return -4;  // failure
@@ -6193,27 +7348,56 @@ INT MMainWnd::CheckData(VOID)
     // upx.exe
     StringCchCopyW(m_szUpxExe, _countof(m_szUpxExe), m_szDataFolder);
     StringCchCatW(m_szUpxExe, _countof(m_szUpxExe), L"\\bin\\upx.exe");
-    if (::GetFileAttributesW(m_szUpxExe) == INVALID_FILE_ATTRIBUTES)
+    if (!PathFileExistsW(m_szUpxExe))
     {
         ErrorBoxDx(TEXT("ERROR: No upx.exe found."));
         return -5;  // failure
+    }
+
+    // include directory
+    StringCchCopyW(m_szIncludeDir, _countof(m_szIncludeDir), m_szDataFolder);
+    StringCchCatW(m_szIncludeDir, _countof(m_szIncludeDir), L"\\lib\\gcc\\i686-w64-mingw32\\10.2.0\\include");
+    if (!PathFileExistsW(m_szIncludeDir))
+    {
+        ErrorBoxDx(TEXT("ERROR: No include directory found."));
+        return -6;  // failure
+    }
+
+    // dfmsc.exe
+    StringCchCopyW(m_szDFMSC, _countof(m_szDFMSC), m_szDataFolder);
+    StringCchCatW(m_szDFMSC, _countof(m_szDFMSC), L"\\bin\\dfmsc.exe");
+    if (!PathFileExistsW(m_szDFMSC))
+    {
+        ErrorBoxDx(TEXT("ERROR: No dfmsc.exe found."));
+        return -7;  // failure
+    }
+
+    // TLB2IDL32.exe
+    StringCchCopyW(m_szTLB2IDL32, _countof(m_szTLB2IDL32), m_szDataFolder);
+    StringCchCatW(m_szTLB2IDL32, _countof(m_szTLB2IDL32), L"\\bin\\tlb2idl32.exe");
+    if (!PathFileExistsW(m_szTLB2IDL32))
+    {
+        ErrorBoxDx(TEXT("ERROR: No TLB2IDL32.exe found."));
+        return -7;  // failure
+    }
+
+    // TLB2IDL64.exe
+    StringCchCopyW(m_szTLB2IDL64, _countof(m_szTLB2IDL64), m_szDataFolder);
+    StringCchCatW(m_szTLB2IDL64, _countof(m_szTLB2IDL64), L"\\bin\\tlb2idl64.exe");
+    if (!PathFileExistsW(m_szTLB2IDL64))
+    {
+        ErrorBoxDx(TEXT("ERROR: No TLB2IDL64.exe found."));
+        return -7;  // failure
     }
 
     // get the module path filename of this application module
     WCHAR szPath[MAX_PATH];
     GetModuleFileNameW(NULL, szPath, _countof(szPath));
 
-    // find the last '\\' or '/'
-    LPWSTR pch = wcsrchr(szPath, L'\\');
-    if (pch == NULL)
-        pch = wcsrchr(szPath, L'/');
-    if (pch == NULL)
-        return -6;
-
     // mcdx.exe
-    size_t diff = pch - szPath;
-    StringCchCopyW(pch, diff, L"\\mcdx.exe");
-    if (::GetFileAttributesW(szPath) != INVALID_FILE_ATTRIBUTES)
+    PathRemoveFileSpecW(szPath);
+    PathAppendW(szPath, L"mcdx.exe");
+    if (PathFileExistsW(szPath))
     {
         StringCchCopyW(m_szMcdxExe, _countof(m_szMcdxExe), szPath);
     }
@@ -6221,10 +7405,10 @@ INT MMainWnd::CheckData(VOID)
     {
         StringCchCopyW(m_szMcdxExe, _countof(m_szMcdxExe), m_szDataFolder);
         StringCchCatW(m_szMcdxExe, _countof(m_szMcdxExe), L"\\bin\\mcdx.exe");
-        if (::GetFileAttributesW(m_szMcdxExe) == INVALID_FILE_ATTRIBUTES)
+        if (!PathFileExistsW(m_szMcdxExe))
         {
             ErrorBoxDx(TEXT("ERROR: No mcdx.exe found."));
-            return -6;  // failure
+            return -8;  // failure
         }
     }
 
@@ -6250,6 +7434,16 @@ void MMainWnd::DoLoadLangInfo(VOID)
 
     // sort
     std::sort(g_langs.begin(), g_langs.end());
+}
+
+BOOL InitLangListBox(HWND hwnd)
+{
+    for (auto& lang : g_langs)
+    {
+        INT index = (INT)SendMessageW(hwnd, LB_ADDSTRING, 0, (LPARAM)lang.str.c_str());
+        SendMessageW(hwnd, LB_SETITEMDATA, index, (LPARAM)lang.LangID);
+    }
+    return TRUE;
 }
 
 // load a file
@@ -6309,6 +7503,8 @@ BOOL MMainWnd::DoLoadFile(HWND hwnd, LPCWSTR pszFileName, DWORD nFilterIndex, BO
         // load it now
         m_bLoading = TRUE;
         {
+            ShowLangArrow(FALSE);
+
             // renewal
             g_res.delete_all();
             g_res.merge(res);
@@ -6330,6 +7526,7 @@ BOOL MMainWnd::DoLoadFile(HWND hwnd, LPCWSTR pszFileName, DWORD nFilterIndex, BO
         // select none
         SelectTV(NULL, FALSE);
 
+        DoSetFileModified(FALSE);
         return TRUE;
     }
 
@@ -6351,6 +7548,8 @@ BOOL MMainWnd::DoLoadFile(HWND hwnd, LPCWSTR pszFileName, DWORD nFilterIndex, BO
         // load it now
         m_bLoading = TRUE;
         {
+            ShowLangArrow(FALSE);
+
             // renewal
             g_res.delete_all();
             g_res.merge(res);
@@ -6372,6 +7571,7 @@ BOOL MMainWnd::DoLoadFile(HWND hwnd, LPCWSTR pszFileName, DWORD nFilterIndex, BO
         // select none
         SelectTV(NULL, FALSE);
 
+        DoSetFileModified(FALSE);
         return TRUE;
     }
 
@@ -6413,6 +7613,11 @@ BOOL MMainWnd::DoLoadFile(HWND hwnd, LPCWSTR pszFileName, DWORD nFilterIndex, BO
 
             // decompressed
             strToOpen = szTempFile;
+        }
+        else
+        {
+            // consider as uncompressed
+            bCompressed = FALSE;
         }
     }
 
@@ -6468,6 +7673,7 @@ BOOL MMainWnd::DoLoadFile(HWND hwnd, LPCWSTR pszFileName, DWORD nFilterIndex, BO
     // load all the resource items from the executable
     m_bLoading = TRUE;
     {
+        ShowLangArrow(FALSE);
         g_res.delete_all();
         g_res.from_res(hMod);
     }
@@ -6494,6 +7700,11 @@ BOOL MMainWnd::DoLoadFile(HWND hwnd, LPCWSTR pszFileName, DWORD nFilterIndex, BO
     // select none
     SelectTV(NULL, FALSE);
 
+    DoSetFileModified(FALSE);
+
+    // update language arrow
+    PostUpdateLangArrow(m_hwnd);
+
     return TRUE;    // success
 }
 
@@ -6509,7 +7720,6 @@ BOOL MMainWnd::UnloadResourceH(HWND hwnd)
 
     // reset the settings of the resource.h file
     g_settings.AddIDC_STATIC();
-    g_settings.bHasIDC_STATIC = FALSE;
     g_settings.id_map.clear();
     g_settings.added_ids.clear();
     g_settings.removed_ids.clear();
@@ -6550,25 +7760,25 @@ BOOL MMainWnd::CheckResourceH(HWND hwnd, LPCTSTR pszPath)
     // find the nearest resource.h file
     size_t diff = pch - szPath;
     StringCchCopy(pch, diff, TEXT("resource.h"));
-    if (GetFileAttributes(szPath) == INVALID_FILE_ATTRIBUTES)
+    if (!PathFileExistsW(szPath))
     {
         StringCchCopy(pch, diff, TEXT("..\\resource.h"));
-        if (GetFileAttributes(szPath) == INVALID_FILE_ATTRIBUTES)
+        if (!PathFileExistsW(szPath))
         {
             StringCchCopy(pch, diff, TEXT("..\\..\\resource.h"));
-            if (GetFileAttributes(szPath) == INVALID_FILE_ATTRIBUTES)
+            if (!PathFileExistsW(szPath))
             {
                 StringCchCopy(pch, diff, TEXT("..\\..\\..\\resource.h"));
-                if (GetFileAttributes(szPath) == INVALID_FILE_ATTRIBUTES)
+                if (!PathFileExistsW(szPath))
                 {
                     StringCchCopy(pch, diff, TEXT("..\\src\\resource.h"));
-                    if (GetFileAttributes(szPath) == INVALID_FILE_ATTRIBUTES)
+                    if (!PathFileExistsW(szPath))
                     {
                         StringCchCopy(pch, diff, TEXT("..\\..\\src\\resource.h"));
-                        if (GetFileAttributes(szPath) == INVALID_FILE_ATTRIBUTES)
+                        if (!PathFileExistsW(szPath))
                         {
                             StringCchCopy(pch, diff, TEXT("..\\..\\..\\src\\resource.h"));
-                            if (GetFileAttributes(szPath) == INVALID_FILE_ATTRIBUTES)
+                            if (!PathFileExistsW(szPath))
                             {
                                 return FALSE;   // not found
                             }
@@ -6588,23 +7798,20 @@ BOOL MMainWnd::DoLoadRC(HWND hwnd, LPCWSTR szRCFile, EntrySet& res)
 {
     // load the RC file to the res variable
     MStringA strOutput;
-    BOOL bOK = res.load_rc(szRCFile, strOutput, m_szWindresExe, m_szCppExe,
-                           m_szMcdxExe, GetMacroDump(), GetIncludesDump());
+    BOOL bOK = res.load_rc(szRCFile, strOutput, m_szWindresExe,
+                           m_szMCppExe, m_szMcdxExe, GetMacroDump(),
+                           GetIncludesDump());
     if (!bOK)
     {
         // failed. show error message
         if (strOutput.empty())
         {
-            SetWindowTextW(m_hBinEdit, LoadStringDx(IDS_COMPILEERROR));
-            ShowBinEdit(FALSE);
+            MsgBoxDx(LoadStringDx(IDS_COMPILEERROR), MB_ICONERROR);
         }
         else
         {
             MAnsiToWide a2w(CP_ACP, strOutput.c_str());
             ErrorBoxDx(a2w.c_str());
-
-            SetWindowTextA(m_hBinEdit, (char *)&strOutput[0]);
-            ShowBinEdit(TRUE, TRUE);
         }
     }
 
@@ -6620,384 +7827,37 @@ BOOL MMainWnd::DoLoadRC(HWND hwnd, LPCWSTR szRCFile, EntrySet& res)
 // find the text
 void MMainWnd::OnFind(HWND hwnd)
 {
-    if (GetWindowTextLength(m_hSrcEdit) == 0)
-        return;     // there is no text in m_hSrcEdit
-
-    if (!IsWindowVisible(m_hSrcEdit))
-        return;     // m_hSrcEdit was not visible
-
-    // close the find/replace dialog if any
-    if (IsWindow(m_hFindReplaceDlg))
-    {
-        SendMessage(m_hFindReplaceDlg, WM_CLOSE, 0, 0);
-        m_hFindReplaceDlg = NULL;
-    }
-
-    // show the find dialog
-    m_fr.hwndOwner = hwnd;
-    m_fr.Flags = FR_HIDEWHOLEWORD | FR_DOWN;
-    m_hFindReplaceDlg = FindText(&m_fr);
+    m_search.bDownward = TRUE;
+    OnItemSearch(hwnd);
 }
 
 // find next
 BOOL MMainWnd::OnFindNext(HWND hwnd)
 {
-    if (GetWindowTextLength(m_hSrcEdit) == 0)
-        return FALSE;   // there is no text in m_hSrcEdit
-
-    if (!IsWindowVisible(m_hSrcEdit))
-        return FALSE;   // m_hSrcEdit was not visible
-
-    // if the text to find was empty, then show the dialog
-    if (m_szFindWhat[0] == 0)
+    m_search.bDownward = TRUE;
+    if (m_search.strText.empty())
     {
-        OnFind(hwnd);
-        return FALSE;
+        OnItemSearch(hwnd);
+        return TRUE;
     }
-
-    // get the selection
-    DWORD ibegin, iend;
-    SendMessage(m_hSrcEdit, EM_GETSEL, (WPARAM)&ibegin, (LPARAM)&iend);
-
-    // m_szFindWhat --> szText
-    TCHAR szText[_countof(m_szFindWhat)];
-    StringCchCopy(szText, _countof(szText), m_szFindWhat);
-    if (szText[0] == 0)
-        return FALSE;
-
-    // get the text of m_hSrcEdit
-    MString str = GetWindowText(m_hSrcEdit);
-    if (str.empty())
-        return FALSE;
-
-    // make the text uppercase if necessary
-    if (!(m_fr.Flags & FR_MATCHCASE))
-    {
-        CharUpperW(szText);
-        CharUpperW(&str[0]);
-    }
-
-    // get the selection text
-    MString substr = str.substr(ibegin, iend - ibegin);
-    if (substr == szText)
-    {
-        // if the selected text was szText, move the starting position
-        ibegin += (DWORD)substr.size();
-    }
-
-    // find the string
-    size_t i = str.find(szText, ibegin);
-    if (i == MString::npos)
-        return FALSE;   // not found
-
-    // found
-    ibegin = (DWORD)i;
-    iend = ibegin + lstrlen(m_szFindWhat);
-
-    // set the text selection
-    SendMessage(m_hSrcEdit, EM_SETSEL, (WPARAM)ibegin, (LPARAM)iend);
-
-    // ensure the text visible
-    SendMessage(m_hSrcEdit, EM_SCROLLCARET, 0, 0);
-
+    DoItemSearchBang(hwnd, NULL);
     return TRUE;
 }
 
 // find previous
 BOOL MMainWnd::OnFindPrev(HWND hwnd)
 {
-    if (GetWindowTextLength(m_hSrcEdit) == 0)
-        return FALSE;   // there is no text in m_hSrcEdit
-    if (!IsWindowVisible(m_hSrcEdit))
-        return FALSE;   // m_hSrcEdit was not visible
-
-    // if the text to find was empty, then show the dialog
-    if (m_szFindWhat[0] == 0)
+    m_search.bDownward = FALSE;
+    if (m_search.strText.empty())
     {
-        OnFind(hwnd);
-        return FALSE;
+        OnItemSearch(hwnd);
+        return TRUE;
     }
-
-    // get the text selection
-    DWORD ibegin, iend;
-    SendMessage(m_hSrcEdit, EM_GETSEL, (WPARAM)&ibegin, (LPARAM)&iend);
-
-    // m_szFindWhat --> szText
-    TCHAR szText[_countof(m_szFindWhat)];
-    StringCchCopy(szText, _countof(szText), m_szFindWhat);
-    if (szText[0] == 0)
-        return FALSE;
-
-    // get the text of m_hSrcEdit
-    MString str = GetWindowText(m_hSrcEdit);
-    if (str.empty())
-        return FALSE;
-
-    // make the text uppercase if necessary
-    if (!(m_fr.Flags & FR_MATCHCASE))
-    {
-        CharUpperW(szText);
-        CharUpperW(&str[0]);
-    }
-
-    // get the selection text
-    MString substr = str.substr(ibegin, iend - ibegin);
-    if (substr == szText)
-    {
-        // if the selected text was szText, move the starting position
-        --ibegin;
-    }
-
-    // find the string barkward
-    size_t i = str.rfind(szText, ibegin);
-    if (i == MString::npos)
-        return FALSE;
-
-    // found
-    ibegin = (DWORD)i;
-    iend = ibegin + lstrlen(m_szFindWhat);
-
-    // set the text selection
-    SendMessage(m_hSrcEdit, EM_SETSEL, (WPARAM)ibegin, (LPARAM)iend);
-
-    // ensure the text visible
-    SendMessage(m_hSrcEdit, EM_SCROLLCARET, 0, 0);
-
+    DoItemSearchBang(hwnd, NULL);
     return TRUE;
 }
 
-// replace next
-BOOL MMainWnd::OnReplaceNext(HWND hwnd)
-{
-    if (GetWindowTextLength(m_hSrcEdit) == 0)
-        return FALSE;   // there is no text in m_hSrcEdit
-    if (!IsWindowVisible(m_hSrcEdit))
-        return FALSE;   // m_hSrcEdit was not visible
-    if (GetWindowStyle(m_hSrcEdit) & ES_READONLY)
-        return FALSE;   // m_hSrcEdit was read-only
-
-    // if the text to find was empty, then show the dialog
-    if (m_szFindWhat[0] == 0)
-    {
-        OnReplace(hwnd);
-        return FALSE;
-    }
-
-    // get the text selection
-    DWORD ibegin, iend;
-    SendMessage(m_hSrcEdit, EM_GETSEL, (WPARAM)&ibegin, (LPARAM)&iend);
-
-    // m_szFindWhat --> szText
-    TCHAR szText[_countof(m_szFindWhat)];
-    StringCchCopy(szText, _countof(szText), m_szFindWhat);
-    if (szText[0] == 0)
-        return FALSE;
-
-    // get the text of m_hSrcEdit
-    MString str = GetWindowText(m_hSrcEdit);
-    if (str.empty())
-        return FALSE;
-
-    // make the text uppercase if necessary
-    if (!(m_fr.Flags & FR_MATCHCASE))
-    {
-        CharUpperW(szText);
-        CharUpperW(&str[0]);
-    }
-
-    // get the selection text
-    MString substr = str.substr(ibegin, iend - ibegin);
-    if (substr == szText)
-    {
-        // if the selected text was szText, replace it and move the starting position
-        SendMessage(m_hSrcEdit, EM_REPLACESEL, TRUE, (LPARAM)m_szReplaceWith);
-        str.replace(ibegin, iend - ibegin, m_szReplaceWith);
-        ibegin += lstrlen(m_szReplaceWith);
-
-        // make it modified
-        Edit_SetModify(m_hSrcEdit, TRUE);
-    }
-
-    // find the text
-    size_t i = str.find(szText, ibegin);
-    if (i == MString::npos)
-        return FALSE;   // not found
-
-    // found
-    ibegin = (DWORD)i;
-    iend = ibegin + lstrlen(m_szFindWhat);
-
-    // set the text selection
-    SendMessage(m_hSrcEdit, EM_SETSEL, (WPARAM)ibegin, (LPARAM)iend);
-
-    // ensure the text visible
-    SendMessage(m_hSrcEdit, EM_SCROLLCARET, 0, 0);
-
-    return TRUE;
-}
-
-// replace previous
-BOOL MMainWnd::OnReplacePrev(HWND hwnd)
-{
-    if (GetWindowTextLength(m_hSrcEdit) == 0)
-        return FALSE;   // there is no text in m_hSrcEdit
-    if (!IsWindowVisible(m_hSrcEdit))
-        return FALSE;   // m_hSrcEdit was not visible
-    if (GetWindowStyle(m_hSrcEdit) & ES_READONLY)
-        return FALSE;   // m_hSrcEdit was read-only
-
-    // if the text to find was empty, then show the dialog
-    if (m_szFindWhat[0] == 0)
-    {
-        OnReplace(hwnd);
-        return FALSE;
-    }
-
-    // get the text selection
-    DWORD ibegin, iend;
-    SendMessage(m_hSrcEdit, EM_GETSEL, (WPARAM)&ibegin, (LPARAM)&iend);
-
-    // m_szFindWhat --> szText
-    TCHAR szText[_countof(m_szFindWhat)];
-    StringCchCopy(szText, _countof(szText), m_szFindWhat);
-    if (szText[0] == 0)
-        return FALSE;
-
-    // get the text of m_hSrcEdit
-    MString str = GetWindowText(m_hSrcEdit);
-    if (str.empty())
-        return FALSE;
-
-    // make the text to find uppercase if necessary
-    if (!(m_fr.Flags & FR_MATCHCASE))
-    {
-        CharUpperW(szText);
-        CharUpperW(&str[0]);
-    }
-
-    // get the selection text
-    MString substr = str.substr(ibegin, iend - ibegin);
-    if (substr == szText)
-    {
-        // if the selected text was szText, replace it and move the starting position
-        SendMessage(m_hSrcEdit, EM_REPLACESEL, TRUE, (LPARAM)m_szReplaceWith);
-        str.replace(ibegin, iend - ibegin, m_szReplaceWith);
-        --ibegin;
-
-        // make it modified
-        Edit_SetModify(m_hSrcEdit, TRUE);
-    }
-
-    // find the string barkward
-    size_t i = str.rfind(szText, ibegin);
-    if (i == MString::npos)
-        return FALSE;
-
-    // found
-    ibegin = (DWORD)i;
-    iend = ibegin + lstrlen(m_szFindWhat);
-
-    // set the text selection
-    SendMessage(m_hSrcEdit, EM_SETSEL, (WPARAM)ibegin, (LPARAM)iend);
-
-    // ensure the text visible
-    SendMessage(m_hSrcEdit, EM_SCROLLCARET, 0, 0);
-
-    return TRUE;
-}
-
-// do replace
-BOOL MMainWnd::OnReplace(HWND hwnd)
-{
-    if (GetWindowTextLength(m_hSrcEdit) == 0)
-        return FALSE;   // there is no text in m_hSrcEdit
-    if (!IsWindowVisible(m_hSrcEdit))
-        return FALSE;   // m_hSrcEdit was not visible
-    if (GetWindowStyle(m_hSrcEdit) & ES_READONLY)
-        return FALSE;   // m_hSrcEdit was read-only
-
-    // close the find/replace dialog if any
-    if (IsWindow(m_hFindReplaceDlg))
-    {
-        SendMessage(m_hFindReplaceDlg, WM_CLOSE, 0, 0);
-        m_hFindReplaceDlg = NULL;
-    }
-
-    // replace the text
-    m_fr.hwndOwner = hwnd;
-    m_fr.Flags = FR_HIDEWHOLEWORD | FR_DOWN;
-    m_hFindReplaceDlg = ReplaceText(&m_fr);
-
-    return TRUE;
-}
-
-// replace all
-BOOL MMainWnd::OnReplaceAll(HWND hwnd)
-{
-    if (GetWindowTextLength(m_hSrcEdit) == 0)
-        return FALSE;   // there is no text in m_hSrcEdit
-    if (!IsWindowVisible(m_hSrcEdit))
-        return FALSE;   // m_hSrcEdit was not visible
-    if (GetWindowStyle(m_hSrcEdit) & ES_READONLY)
-        return FALSE;   // m_hSrcEdit was read-only
-
-    // get the text selection
-    DWORD istart, iend;
-    SendMessage(m_hSrcEdit, EM_GETSEL, (WPARAM)&istart, (LPARAM)&iend);
-
-    // move the caret to the top
-    SendMessage(m_hSrcEdit, EM_SETSEL, 0, 0);
-
-    // repeat replacing until failure
-    while (OnReplaceNext(hwnd))
-        ;
-
-    // restore the text selection
-    SendMessage(m_hSrcEdit, EM_SETSEL, istart, iend);
-
-    // ensure the text visible
-    SendMessage(m_hSrcEdit, EM_SCROLLCARET, 0, 0);
-
-    return TRUE;
-}
-
-// do the find message for FindText/ReplaceText API
-LRESULT MMainWnd::OnFindMsg(HWND hwnd, WPARAM wParam, LPARAM lParam)
-{
-    if (m_fr.Flags & FR_DIALOGTERM)     // to be destroyed
-    {
-        m_hFindReplaceDlg = NULL;
-        SetFocus(m_hSrcEdit);
-        return 0;
-    }
-
-    if (m_fr.Flags & FR_REPLACEALL)     // do replace all
-    {
-        OnReplaceAll(hwnd);
-    }
-    else if (m_fr.Flags & FR_REPLACE)   // do replace once
-    {
-        if (m_fr.Flags & FR_DOWN)
-            OnReplaceNext(hwnd);
-        else
-            OnReplacePrev(hwnd);
-    }
-    else if (m_fr.Flags & FR_FINDNEXT)  // do find
-    {
-        if (m_fr.Flags & FR_DOWN)       // find downward
-        {
-            OnFindNext(hwnd);
-        }
-        else    // find upward
-        {
-            OnFindPrev(hwnd);
-        }
-    }
-    return 0;
-}
-
-// write a language-specific RC text
-BOOL MMainWnd::DoWriteRCLang(MFile& file, ResToText& res2text, WORD lang)
+BOOL MMainWnd::DoWriteRCLangUTF8(MFile& file, ResToText& res2text, WORD lang, const EntrySet& targets)
 {
     MTextToAnsi comment_sep(CP_UTF8, LoadStringDx(IDS_COMMENT_SEP));
 
@@ -7013,8 +7873,8 @@ BOOL MMainWnd::DoWriteRCLang(MFile& file, ResToText& res2text, WORD lang)
     file.WriteSzA(MWideToAnsi(CP_ACP, strLang.c_str()).c_str());
 
     // search the language entries
-    EntrySetBase found;
-    g_res.search(found, ET_LANG, WORD(0), WORD(0), lang);
+    EntrySet found;
+    targets.search(found, ET_LANG, WORD(0), WORD(0), lang);
 
     std::vector<EntryBase *> vecFound(found.begin(), found.end());
 
@@ -7036,8 +7896,8 @@ BOOL MMainWnd::DoWriteRCLang(MFile& file, ResToText& res2text, WORD lang)
         old_type = type;
         type = entry->m_type;
 
-        // ignore the string or message tables
-        if (type == RT_STRING || type == RT_MESSAGETABLE)
+        // ignore the string or message tables or font dir
+        if (type == RT_STRING || type == RT_MESSAGETABLE || type == RT_FONTDIR)
         {
             continue;
         }
@@ -7070,7 +7930,7 @@ BOOL MMainWnd::DoWriteRCLang(MFile& file, ResToText& res2text, WORD lang)
 
     // search the string tables
     found.clear();
-    g_res.search(found, ET_LANG, RT_STRING, (WORD)0, lang);
+    targets.search(found, ET_LANG, RT_STRING, (WORD)0, lang);
     if (found.size())
     {
         if (g_settings.bRedundantComments)
@@ -7109,7 +7969,7 @@ BOOL MMainWnd::DoWriteRCLang(MFile& file, ResToText& res2text, WORD lang)
 
     // search the message tables
     found.clear();
-    g_res.search(found, ET_LANG, RT_MESSAGETABLE, (WORD)0, lang);
+    targets.search(found, ET_LANG, RT_MESSAGETABLE, (WORD)0, lang);
     if (found.size())
     {
         if (g_settings.bRedundantComments)
@@ -7149,10 +8009,163 @@ BOOL MMainWnd::DoWriteRCLang(MFile& file, ResToText& res2text, WORD lang)
     return TRUE;
 }
 
+BOOL MMainWnd::DoWriteRCLangUTF16(MFile& file, ResToText& res2text, WORD lang, const EntrySet& targets)
+{
+    MString comment_sep(LoadStringDx(IDS_COMMENT_SEP));
+
+    if (!g_settings.bSepFilesByLang && g_settings.bRedundantComments)
+    {
+        file.WriteSzW(comment_sep.c_str());
+        file.WriteSzW(L"\r\n");
+    }
+
+    // dump a comment and a LANGUAGE statement
+    MString strLang = ::GetLanguageStatement(lang, TRUE);
+    strLang += L"\r\n";
+    file.WriteSzW(strLang.c_str());
+
+    // search the language entries
+    EntrySet found;
+    targets.search(found, ET_LANG, WORD(0), WORD(0), lang);
+
+    std::vector<EntryBase *> vecFound(found.begin(), found.end());
+
+    std::sort(vecFound.begin(), vecFound.end(),
+        [](const EntryBase *a, const EntryBase *b) {
+            if (a->m_type < b->m_type)
+                return true;
+            if (a->m_type > b->m_type)
+                return false;
+            return a->m_name < b->m_name;
+        }
+    );
+
+    MIdOrString type, old_type;
+
+    // for all found entries
+    for (auto entry : vecFound)
+    {
+        old_type = type;
+        type = entry->m_type;
+
+        // ignore the string or message tables or font dir 
+        if (type == RT_STRING || type == RT_MESSAGETABLE || type == RT_FONTDIR)
+        {
+            continue;
+        }
+
+        // dump the entry
+        MString str = res2text.DumpEntry(*entry);
+        if (!str.empty())
+        {
+            // output redundant comments
+            if (type != old_type && g_settings.bRedundantComments)
+            {
+                file.WriteSzW(comment_sep.c_str());
+                MStringW strType = res2text.GetResTypeName(type);
+                file.WriteSzW(L"// ");
+                file.WriteSzW(strType.c_str());
+                file.WriteSzW(L"\r\n\r\n");
+            }
+
+            mstr_trim(str);     // trim
+
+            // convert the text to UTF-8
+            file.WriteSzW(str.c_str());
+
+            // add newlines
+            file.WriteSzW(L"\r\n\r\n");
+        }
+    }
+
+    // search the string tables
+    found.clear();
+    targets.search(found, ET_LANG, RT_STRING, (WORD)0, lang);
+    if (found.size())
+    {
+        if (g_settings.bRedundantComments)
+        {
+            file.WriteSzW(comment_sep.c_str());
+            file.WriteSzW(L"// RT_STRING\r\n\r\n");
+        }
+
+        // found --> str_res
+        StringRes str_res;
+        for (auto e : found)
+        {
+            if (e->m_lang != lang)
+                continue;       // must be same language
+
+            MByteStreamEx stream(e->m_data);
+            if (!str_res.LoadFromStream(stream, e->m_name.m_id))
+                return FALSE;
+        }
+
+        // dump
+        MString str = str_res.Dump();
+
+        // trim
+        mstr_trim(str);
+
+        // append newlines
+        str += L"\r\n\r\n";
+
+        // write it
+        file.WriteSzW(str.c_str());
+    }
+
+    // search the message tables
+    found.clear();
+    targets.search(found, ET_LANG, RT_MESSAGETABLE, (WORD)0, lang);
+    if (found.size())
+    {
+        if (g_settings.bRedundantComments)
+        {
+            file.WriteSzW(comment_sep.c_str());
+            file.WriteSzW(L"// RT_MESSAGETABLE\r\n\r\n");
+        }
+
+        // found --> msg_res
+        MessageRes msg_res;
+        for (auto e : found)
+        {
+            if (e->m_lang != lang)
+                continue;       // must be same language
+
+            MByteStreamEx stream(e->m_data);
+            if (!msg_res.LoadFromStream(stream, e->m_name.m_id))
+                return FALSE;
+        }
+
+        // dump it
+        MString str;
+        str += L"#ifdef APSTUDIO_INVOKED\r\n";
+        str += L"    #error Ap Studio cannot edit this message table.\r\n";
+        str += L"#endif\r\n";
+        str += L"#ifdef MCDX_INVOKED\r\n";
+        str += msg_res.Dump();
+        str += L"#endif\r\n\r\n";
+
+        // write it
+        file.WriteSzW(str.c_str());
+    }
+
+    return TRUE;
+}
+
+// write a language-specific RC text
+BOOL MMainWnd::DoWriteRCLang(MFile& file, ResToText& res2text, WORD lang, const EntrySet& targets)
+{
+    if (g_settings.bRCFileUTF16)
+        return DoWriteRCLangUTF16(file, res2text, lang, targets);
+    else
+        return DoWriteRCLangUTF8(file, res2text, lang, targets);
+}
+
 // do backup a folder
 BOOL MMainWnd::DoBackupFolder(LPCWSTR pszPath, UINT nCount)
 {
-    if (GetFileAttributes(pszPath) == INVALID_FILE_ATTRIBUTES)
+    if (!PathIsDirectoryW(pszPath))
         return TRUE;    // no files to be backup'ed
 
     if (nCount < s_nBackupMaxCount)     // less than max count
@@ -7164,8 +8177,8 @@ BOOL MMainWnd::DoBackupFolder(LPCWSTR pszPath, UINT nCount)
         DoBackupFolder(strPath.c_str(), nCount + 1);
 
         // rename the current folder as an "old" folder
-        return MoveFileEx(pszPath, strPath.c_str(),
-            MOVEFILE_COPY_ALLOWED | MOVEFILE_REPLACE_EXISTING);
+        return MoveFileExW(pszPath, strPath.c_str(),
+                           MOVEFILE_COPY_ALLOWED | MOVEFILE_REPLACE_EXISTING);
     }
     else
     {
@@ -7179,7 +8192,7 @@ BOOL MMainWnd::DoBackupFolder(LPCWSTR pszPath, UINT nCount)
 // do backup a file
 BOOL MMainWnd::DoBackupFile(LPCWSTR pszPath, UINT nCount)
 {
-    if (GetFileAttributes(pszPath) == INVALID_FILE_ATTRIBUTES)
+    if (!PathFileExistsW(pszPath))
         return TRUE;
 
     if (nCount < s_nBackupMaxCount)     // less than max count
@@ -7191,7 +8204,7 @@ BOOL MMainWnd::DoBackupFile(LPCWSTR pszPath, UINT nCount)
         DoBackupFile(strPath.c_str(), nCount + 1);
 
         // copy the current file as an "old" file
-        return CopyFile(pszPath, strPath.c_str(), FALSE);
+        return CopyFileW(pszPath, strPath.c_str(), FALSE);
     }
     else
     {
@@ -7204,11 +8217,20 @@ BOOL MMainWnd::DoBackupFile(LPCWSTR pszPath, UINT nCount)
 // write a RC file
 BOOL MMainWnd::DoWriteRC(LPCWSTR pszFileName, LPCWSTR pszResH)
 {
+    EntrySet found;
+    g_res.search(found, ET_LANG);
+
+    return DoWriteRC(pszFileName, pszResH, found);
+}
+
+// write a RC file
+BOOL MMainWnd::DoWriteRC(LPCWSTR pszFileName, LPCWSTR pszResH, const EntrySet& found)
+{
     ResToText res2text;
     res2text.m_bHumanReadable = FALSE;  // it's not human-friendly
     res2text.m_bNoLanguage = TRUE;      // no LANGUAGE statements generated
 
-    MTextToAnsi comment_sep(CP_UTF8, LoadStringDx(IDS_COMMENT_SEP));
+    MWideToAnsi comment_sep(CP_UTF8, LoadStringDx(IDS_COMMENT_SEP));
 
     // check not locking
     if (IsFileLockedDx(pszFileName))
@@ -7228,35 +8250,66 @@ BOOL MMainWnd::DoWriteRC(LPCWSTR pszFileName, LPCWSTR pszResH)
     if (!file)
         return FALSE;
 
-    // dump heading
-    {
-        WCHAR szTitle[MAX_PATH];
-        GetFileTitleW(pszFileName, szTitle, _countof(szTitle));
+    BOOL bRCFileUTF16 = g_settings.bRCFileUTF16;
 
+    WCHAR szTitle[MAX_PATH];
+    GetFileTitleW(pszFileName, szTitle, _countof(szTitle));
+
+    // dump heading
+    if (bRCFileUTF16)
+    {
+        file.WriteFormatW(L"// %s\r\n", szTitle);
+
+        file.WriteSzW(LoadStringDx(IDS_NOTICE));
+        file.WriteSzW(LoadStringDx(IDS_DAGGER));
+        file.WriteSzW(L"\r\n");
+
+        if (pszResH && pszResH[0])
+            file.WriteSzW(L"#include \"resource.h\"\r\n");
+        file.WriteSzW(L"#define APSTUDIO_HIDDEN_SYMBOLS\r\n");
+        file.WriteSzW(L"#include <windows.h>\r\n");
+        file.WriteSzW(L"#include <commctrl.h>\r\n");
+        file.WriteSzW(L"#undef APSTUDIO_HIDDEN_SYMBOLS\r\n");
+        file.WriteSzW(L"#pragma code_page(65001) // UTF-8\r\n\r\n");
+
+        if (g_settings.bUseIDC_STATIC && !g_settings.bHideID)
+        {
+            file.WriteSzW(L"#ifndef IDC_STATIC\r\n");
+            file.WriteSzW(L"    #define IDC_STATIC (-1)\r\n");
+            file.WriteSzW(L"#endif\r\n\r\n");
+        }
+    }
+    else
+    {
         MWideToAnsi utf8(CP_UTF8, szTitle);
         file.WriteFormatA("// %s\r\n", utf8.c_str());
 
         MWideToAnsi utf8Notice(CP_UTF8, LoadStringDx(IDS_NOTICE));
         MWideToAnsi utf8Dagger(CP_UTF8, LoadStringDx(IDS_DAGGER));
-        file.WriteFormatA(utf8Notice.c_str());
-        file.WriteFormatA(utf8Dagger.c_str());
-        file.WriteFormatA("\r\n");
+        file.WriteSzA(utf8Notice.c_str());
+        file.WriteSzA(utf8Dagger.c_str());
+        file.WriteSzA("\r\n");
+
+        if (pszResH && pszResH[0])
+            file.WriteSzA("#include \"resource.h\"\r\n");
+        file.WriteSzA("#define APSTUDIO_HIDDEN_SYMBOLS\r\n");
+        file.WriteSzA("#include <windows.h>\r\n");
+        file.WriteSzA("#include <commctrl.h>\r\n");
+        file.WriteSzA("#undef APSTUDIO_HIDDEN_SYMBOLS\r\n");
+        file.WriteSzA("#pragma code_page(65001) // UTF-8\r\n\r\n");
+
+        if (g_settings.bUseIDC_STATIC && !g_settings.bHideID)
+        {
+            file.WriteSzA("#ifndef IDC_STATIC\r\n");
+            file.WriteSzA("    #define IDC_STATIC (-1)\r\n");
+            file.WriteSzA("#endif\r\n\r\n");
+        }
     }
-    if (pszResH && pszResH[0])
-        file.WriteFormatA("#include \"resource.h\"\r\n");
-    file.WriteFormatA("#define APSTUDIO_HIDDEN_SYMBOLS\r\n");
-    file.WriteFormatA("#include <windows.h>\r\n");
-    file.WriteFormatA("#include <commctrl.h>\r\n");
-    file.WriteFormatA("#undef APSTUDIO_HIDDEN_SYMBOLS\r\n");
-    file.WriteFormatA("#pragma code_page(65001) // UTF-8\r\n\r\n");
 
     // get the used languages
     std::unordered_set<WORD> langs;
     typedef std::pair<WORD, MStringW> lang_pair;
     std::vector<lang_pair> lang_vec;
-
-    EntrySetBase found;
-    g_res.search(found, ET_LANG);
 
     for (auto res : found)
     {
@@ -7285,24 +8338,24 @@ BOOL MMainWnd::DoWriteRC(LPCWSTR pszFileName, LPCWSTR pszResH)
         // dump neutral
         if (langs.count(0) > 0)
         {
-            if (!DoWriteRCLang(file, res2text, 0))
+            if (!DoWriteRCLang(file, res2text, 0, found))
                 return FALSE;
         }
 
         // create "lang" directory path
-        TCHAR szLangDir[MAX_PATH];
-        StringCchCopy(szLangDir, _countof(szLangDir), pszFileName);
+        WCHAR szLangDir[MAX_PATH];
+        StringCchCopyW(szLangDir, _countof(szLangDir), pszFileName);
 
         // find the last '\\' or '/'
-        TCHAR *pch = mstrrchr(szLangDir, TEXT('\\'));
+        WCHAR *pch = wcsrchr(szLangDir, L'\\');
         if (pch == NULL)
-            pch = mstrrchr(szLangDir, TEXT('/'));
+            pch = mstrrchr(szLangDir, L'/');
         if (pch == NULL)
             return FALSE;
 
         // build the lang directory path
         *pch = 0;
-        StringCchCat(szLangDir, _countof(szLangDir), TEXT("/lang"));
+        StringCchCatW(szLangDir, _countof(szLangDir), TEXT("/lang"));
 
         // backup and create "lang" directory
         for (auto lang_pair : lang_vec)
@@ -7325,12 +8378,12 @@ BOOL MMainWnd::DoWriteRC(LPCWSTR pszFileName, LPCWSTR pszResH)
                 continue;
 
             // create lang/XX_XX.rc file
-            TCHAR szLangFile[MAX_PATH];
-            StringCchCopy(szLangFile, _countof(szLangFile), szLangDir);
-            StringCchCat(szLangFile, _countof(szLangFile), TEXT("/"));
-            MString lang_name = lang_pair.second;
-            StringCchCat(szLangFile, _countof(szLangFile), lang_name.c_str());
-            StringCchCat(szLangFile, _countof(szLangFile), TEXT(".rc"));
+            WCHAR szLangFile[MAX_PATH];
+            StringCchCopyW(szLangFile, _countof(szLangFile), szLangDir);
+            StringCchCatW(szLangFile, _countof(szLangFile), TEXT("/"));
+            MStringW lang_name = lang_pair.second;
+            StringCchCatW(szLangFile, _countof(szLangFile), lang_name.c_str());
+            StringCchCatW(szLangFile, _countof(szLangFile), TEXT(".rc"));
             //MessageBox(NULL, szLangFile, NULL, 0);
 
             if (g_settings.bBackup)
@@ -7338,22 +8391,37 @@ BOOL MMainWnd::DoWriteRC(LPCWSTR pszFileName, LPCWSTR pszResH)
 
             // dump to lang/XX_XX.rc file
             MFile lang_file(szLangFile, TRUE);
+            if (bRCFileUTF16)
+            {
+                lang_file.WriteSzW(LoadStringDx(IDS_NOTICE));
+                lang_file.WriteSzW(LoadStringDx(IDS_DAGGER));
+                lang_file.WriteSzW(L"\r\n");
+                lang_file.WriteSzW(L"#pragma code_page(65001) // UTF-8\r\n\r\n");
+            }
+            else
             {
                 MWideToAnsi utf8Notice(CP_UTF8, LoadStringDx(IDS_NOTICE));
                 MWideToAnsi utf8Dagger(CP_UTF8, LoadStringDx(IDS_DAGGER));
-                lang_file.WriteFormatA(utf8Notice.c_str());
-                lang_file.WriteFormatA(utf8Dagger.c_str());
-                lang_file.WriteFormatA("\r\n");
+                lang_file.WriteSzA(utf8Notice.c_str());
+                lang_file.WriteSzA(utf8Dagger.c_str());
+                lang_file.WriteSzA("\r\n");
+                lang_file.WriteSzA("#pragma code_page(65001) // UTF-8\r\n\r\n");
             }
-            lang_file.WriteFormatA("#pragma code_page(65001) // UTF-8\r\n\r\n");
             if (!lang_file)
                 return FALSE;
-            if (!DoWriteRCLang(lang_file, res2text, lang))
+            if (!DoWriteRCLang(lang_file, res2text, lang, found))
                 return FALSE;
 
             if (g_settings.bRedundantComments)
             {
-                lang_file.WriteSzA(comment_sep.c_str());
+                if (bRCFileUTF16)
+                {
+                    lang_file.WriteSzW(LoadStringDx(IDS_COMMENT_SEP));
+                }
+                else
+                {
+                    lang_file.WriteSzA(comment_sep.c_str());
+                }
             }
         }
     }
@@ -7364,7 +8432,7 @@ BOOL MMainWnd::DoWriteRC(LPCWSTR pszFileName, LPCWSTR pszResH)
         {
             auto lang = lang_pair.first;
             // write it for each language
-            if (!DoWriteRCLang(file, res2text, lang))
+            if (!DoWriteRCLang(file, res2text, lang, found))
                 return FALSE;
         }
     }
@@ -7375,8 +8443,16 @@ BOOL MMainWnd::DoWriteRC(LPCWSTR pszFileName, LPCWSTR pszResH)
         // write a C++ comment to make a section
         if (g_settings.bRedundantComments)
         {
-            file.WriteSzA(comment_sep.c_str());
-            file.WriteSzA("// Languages\r\n\r\n");
+            if (bRCFileUTF16)
+            {
+                file.WriteSzW(LoadStringDx(IDS_COMMENT_SEP));
+                file.WriteSzW(L"// Languages\r\n\r\n");
+            }
+            else
+            {
+                file.WriteSzA(comment_sep.c_str());
+                file.WriteSzA("// Languages\r\n\r\n");
+            }
         }
 
         if (g_settings.bSelectableByMacro)
@@ -7394,20 +8470,38 @@ BOOL MMainWnd::DoWriteRC(LPCWSTR pszFileName, LPCWSTR pszResH)
                 MString lang_name2 = lang_name1;
                 CharUpperW(&lang_name2[0]);
 
-                // write "#ifdef LANGUAGE_...\r\n"
-                file.WriteSzA("#ifdef LANGUAGE_");
-                MWideToAnsi lang2_w2a(CP_ACP, lang_name2.c_str());
-                file.WriteSzA(lang2_w2a.c_str());
-                file.WriteSzA("\r\n");
+                if (bRCFileUTF16)
+                {
+                    // write "#ifdef LANGUAGE_...\r\n"
+                    file.WriteSzW(L"#ifdef LANGUAGE_");
+                    file.WriteSzW(lang_name2.c_str());
+                    file.WriteSzW(L"\r\n");
 
-                // write "#define \"lang/....rc\"\r\n"
-                file.WriteSzA("    #include \"lang/");
-                MWideToAnsi lang1_w2a(CP_ACP, lang_name1.c_str());
-                file.WriteSzA(lang1_w2a.c_str());
-                file.WriteSzA(".rc\"\r\n");
+                    // write "#define \"lang/....rc\"\r\n"
+                    file.WriteSzW(L"    #include \"lang/");
+                    file.WriteSzW(lang_name1.c_str());
+                    file.WriteSzW(L".rc\"\r\n");
 
-                // write "#endif\r\n"
-                file.WriteSzA("#endif\r\n");
+                    // write "#endif\r\n"
+                    file.WriteSzW(L"#endif\r\n");
+                }
+                else
+                {
+                    // write "#ifdef LANGUAGE_...\r\n"
+                    file.WriteSzA("#ifdef LANGUAGE_");
+                    MWideToAnsi lang2_w2a(CP_ACP, lang_name2.c_str());
+                    file.WriteSzA(lang2_w2a.c_str());
+                    file.WriteSzA("\r\n");
+
+                    // write "#define \"lang/....rc\"\r\n"
+                    file.WriteSzA("    #include \"lang/");
+                    MWideToAnsi lang1_w2a(CP_ACP, lang_name1.c_str());
+                    file.WriteSzA(lang1_w2a.c_str());
+                    file.WriteSzA(".rc\"\r\n");
+
+                    // write "#endif\r\n"
+                    file.WriteSzA("#endif\r\n");
+                }
             }
         }
         else
@@ -7421,51 +8515,108 @@ BOOL MMainWnd::DoWriteRC(LPCWSTR pszFileName, LPCWSTR pszResH)
                 // get the language name (such as en_US, ja_JP, etc.) from database
                 MString lang_name1 = g_db.GetLangName(lang);
 
-                // write "#include \"lang/....rc\"\r\n"
-                file.WriteSzA("#include \"lang/");
-                file.WriteSzA(MWideToAnsi(CP_ACP, lang_name1.c_str()).c_str());
-                file.WriteSzA(".rc\"\r\n");
+                if (bRCFileUTF16)
+                {
+                    // write "#include \"lang/....rc\"\r\n"
+                    file.WriteSzW(L"#include \"lang/");
+                    file.WriteSzW(lang_name1.c_str());
+                    file.WriteSzW(L".rc\"\r\n");
+                }
+                else
+                {
+                    // write "#include \"lang/....rc\"\r\n"
+                    file.WriteSzA("#include \"lang/");
+                    file.WriteSzA(MWideToAnsi(CP_ACP, lang_name1.c_str()).c_str());
+                    file.WriteSzA(".rc\"\r\n");
+                }
             }
         }
 
-        file.WriteSzA("\r\n");
+        if (bRCFileUTF16)
+            file.WriteSzW(L"\r\n");
+        else
+            file.WriteSzA("\r\n");
     }
 
     if (g_settings.bRedundantComments)
     {
-        file.WriteSzA(comment_sep.c_str());
-        file.WriteSzA("// TEXTINCLUDE\r\n\r\n");
+        if (bRCFileUTF16)
+        {
+            file.WriteSzW(LoadStringDx(IDS_COMMENT_SEP));
+            file.WriteSzW(L"// TEXTINCLUDE\r\n\r\n");
+        }
+        else
+        {
+            file.WriteSzA(comment_sep.c_str());
+            file.WriteSzA("// TEXTINCLUDE\r\n\r\n");
+        }
     }
 
-    file.WriteSzA("#ifdef APSTUDIO_INVOKED\r\n\r\n");
-
-    // write three TEXTINCLUDE's
-    file.WriteSzA("1 TEXTINCLUDE\r\n");
-    file.WriteSzA("BEGIN\r\n");
-    file.WriteSzA("    \"resource.h\\0\"\r\n");
-    file.WriteSzA("END\r\n\r\n");
-
-    file.WriteSzA("2 TEXTINCLUDE\r\n");
-    file.WriteSzA("BEGIN\r\n");
-    file.WriteSzA("    \"#define APSTUDIO_HIDDEN_SYMBOLS\\r\\n\"\r\n");
-    file.WriteSzA("    \"#include <windows.h>\\r\\n\"\r\n");
-    file.WriteSzA("    \"#include <commctrl.h>\\r\\n\"\r\n");
-    file.WriteSzA("    \"#undef APSTUDIO_HIDDEN_SYMBOLS\\r\\n\"\r\n");
-    file.WriteSzA("    \"\\0\"\r\n");
-    file.WriteSzA("END\r\n\r\n");
-
-    file.WriteSzA("3 TEXTINCLUDE\r\n");
-    file.WriteSzA("BEGIN\r\n");
-    file.WriteSzA("    \"\\r\\n\"\r\n");
-    file.WriteSzA("    \"\\0\"\r\n");
-    file.WriteSzA("END\r\n\r\n");
-
-    file.WriteSzA("#endif    // APSTUDIO_INVOKED\r\n");
-
-    if (g_settings.bRedundantComments)
+    if (bRCFileUTF16)
     {
-        file.WriteSzA("\r\n");
-        file.WriteSzA(comment_sep.c_str());
+        file.WriteSzW(L"#ifdef APSTUDIO_INVOKED\r\n\r\n");
+
+        // write three TEXTINCLUDE's
+        file.WriteSzW(L"1 TEXTINCLUDE\r\n");
+        file.WriteSzW(L"BEGIN\r\n");
+        file.WriteSzW(L"    \"resource.h\\0\"\r\n");
+        file.WriteSzW(L"END\r\n\r\n");
+
+        file.WriteSzW(L"2 TEXTINCLUDE\r\n");
+        file.WriteSzW(L"BEGIN\r\n");
+        file.WriteSzW(L"    \"#define APSTUDIO_HIDDEN_SYMBOLS\\r\\n\"\r\n");
+        file.WriteSzW(L"    \"#include <windows.h>\\r\\n\"\r\n");
+        file.WriteSzW(L"    \"#include <commctrl.h>\\r\\n\"\r\n");
+        file.WriteSzW(L"    \"#undef APSTUDIO_HIDDEN_SYMBOLS\\r\\n\"\r\n");
+        file.WriteSzW(L"    \"\\0\"\r\n");
+        file.WriteSzW(L"END\r\n\r\n");
+
+        file.WriteSzW(L"3 TEXTINCLUDE\r\n");
+        file.WriteSzW(L"BEGIN\r\n");
+        file.WriteSzW(L"    \"\\r\\n\"\r\n");
+        file.WriteSzW(L"    \"\\0\"\r\n");
+        file.WriteSzW(L"END\r\n\r\n");
+
+        file.WriteSzW(L"#endif    // APSTUDIO_INVOKED\r\n");
+
+        if (g_settings.bRedundantComments)
+        {
+            file.WriteSzW(L"\r\n");
+            file.WriteSzW(LoadStringDx(IDS_COMMENT_SEP));
+        }
+    }
+    else
+    {
+        file.WriteSzA("#ifdef APSTUDIO_INVOKED\r\n\r\n");
+
+        // write three TEXTINCLUDE's
+        file.WriteSzA("1 TEXTINCLUDE\r\n");
+        file.WriteSzA("BEGIN\r\n");
+        file.WriteSzA("    \"resource.h\\0\"\r\n");
+        file.WriteSzA("END\r\n\r\n");
+
+        file.WriteSzA("2 TEXTINCLUDE\r\n");
+        file.WriteSzA("BEGIN\r\n");
+        file.WriteSzA("    \"#define APSTUDIO_HIDDEN_SYMBOLS\\r\\n\"\r\n");
+        file.WriteSzA("    \"#include <windows.h>\\r\\n\"\r\n");
+        file.WriteSzA("    \"#include <commctrl.h>\\r\\n\"\r\n");
+        file.WriteSzA("    \"#undef APSTUDIO_HIDDEN_SYMBOLS\\r\\n\"\r\n");
+        file.WriteSzA("    \"\\0\"\r\n");
+        file.WriteSzA("END\r\n\r\n");
+
+        file.WriteSzA("3 TEXTINCLUDE\r\n");
+        file.WriteSzA("BEGIN\r\n");
+        file.WriteSzA("    \"\\r\\n\"\r\n");
+        file.WriteSzA("    \"\\0\"\r\n");
+        file.WriteSzA("END\r\n\r\n");
+
+        file.WriteSzA("#endif    // APSTUDIO_INVOKED\r\n");
+
+        if (g_settings.bRedundantComments)
+        {
+            file.WriteSzA("\r\n");
+            file.WriteSzA(comment_sep.c_str());
+        }
     }
 
     return TRUE;
@@ -7538,15 +8689,11 @@ BOOL MMainWnd::DoWriteResH(LPCWSTR pszResH, LPCWSTR pszRCFile)
     }
 
     // sort macro definitions
-    bool has_IDC_STATIC = false;
     std::vector<MACRO_DEF> defs;
     for (auto& pair : g_settings.id_map)
     {
         if (pair.first == "IDC_STATIC")
-        {
-            has_IDC_STATIC = true;
             continue;
-        }
 
         MACRO_DEF def;
         def.name = pair.first;
@@ -7591,11 +8738,11 @@ BOOL MMainWnd::DoWriteResH(LPCWSTR pszResH, LPCWSTR pszRCFile)
         }
     );
 
-    // write the macro definitions
-    if (has_IDC_STATIC)
+    if (g_settings.bUseIDC_STATIC)
     {
-        file.WriteFormatA("\r\n");
-        WriteMacroLine(file, "IDC_STATIC", "-1");
+        // write the macro definitions
+        file.WriteSzA("\r\n");
+        WriteMacroLine(file, "IDC_STATIC", "(-1)");
     }
 
     MStringA prefix;
@@ -7603,6 +8750,9 @@ BOOL MMainWnd::DoWriteResH(LPCWSTR pszResH, LPCWSTR pszRCFile)
     file.WriteFormatA("\r\n");
     for (auto& def : defs)
     {
+        if (def.name == "IDC_STATIC")
+            continue;
+
         if (!first && prefix != def.prefix)
             file.WriteFormatA("\r\n");
 
@@ -7687,7 +8837,7 @@ void MMainWnd::DoIDStat(UINT anValues[5])
 
             if (i == 3)
             {
-                if (auto e = g_res.find(ET_LANG, RT_CURSOR, WORD(table_entry.value)))
+                if (g_res.find(ET_LANG, RT_CURSOR, WORD(table_entry.value)))
                     continue;   // it was Cursor.ID, not Control.ID
             }
 
@@ -7766,7 +8916,7 @@ inline BOOL MMainWnd::DoExtract(const EntryBase *entry, BOOL bExporting)
         }
         if (wType == (WORD)(UINT_PTR)RT_FONTDIR)
         {
-            return g_res.extract_bin(filename.c_str(), entry);
+            return TRUE;
         }
         if (wType == (WORD)(UINT_PTR)RT_FONT)
         {
@@ -7883,7 +9033,17 @@ inline BOOL MMainWnd::DoExtract(const EntryBase *entry, BOOL bExporting)
 // do export the resource data to an RC file and related files
 BOOL MMainWnd::DoExport(LPCWSTR pszRCFile, LPWSTR pszResHFile)
 {
-    if (g_res.empty())
+    // search the language entries
+    EntrySet found;
+    g_res.search(found, ET_LANG);
+
+    return DoExport(pszRCFile, pszResHFile, found);
+}
+
+// do export the resource data to an RC file and related files
+BOOL MMainWnd::DoExport(LPCWSTR pszRCFile, LPWSTR pszResHFile, const EntrySet& found)
+{
+    if (found.empty())
     {
         // unable to export the empty data
         ErrorBoxDx(IDS_DATAISEMPTY);
@@ -7902,10 +9062,6 @@ BOOL MMainWnd::DoExport(LPCWSTR pszRCFile, LPWSTR pszResHFile)
         return FALSE;   // failure
 
     *pch = 0;
-
-    // search the language entries
-    EntrySetBase found;
-    g_res.search(found, ET_LANG);
 
     // check whether there is an external file to be extracted
     BOOL bHasExternFile = FALSE;
@@ -7950,29 +9106,29 @@ BOOL MMainWnd::DoExport(LPCWSTR pszRCFile, LPWSTR pszResHFile)
             CreateDirectory(strResDir.c_str(), NULL);
         }
 
-        // search the language entries
-        EntrySetBase found;
-        g_res.search(found, ET_LANG);
-
         // extract each data if necessary
         for (auto e : found)
         {
-            if (e->m_type == RT_STRING || e->m_type == RT_MESSAGETABLE)
+            if (e->m_type == RT_STRING || e->m_type == RT_MESSAGETABLE ||
+                e->m_type == RT_FONTDIR)
+            {
                 continue;
+            }
             if (!DoExtract(e, TRUE))
                 return FALSE;
         }
     }
 
     BOOL bOK = FALSE;
-    if (m_szResourceH[0] || !g_settings.id_map.empty())
+    if ((m_szResourceH[0] || !g_settings.IsIDMapEmpty()) &&
+        !g_settings.bHideID)
     {
         // build the resource.h file path
         *pch = 0;
         StringCchCatW(szPath, _countof(szPath), L"\\resource.h");
 
         // write the resource.h file and the RC file
-        bOK = DoWriteResH(szPath, pszRCFile) && DoWriteRC(pszRCFile, szPath);
+        bOK = DoWriteResH(szPath, pszRCFile) && DoWriteRC(pszRCFile, szPath, found);
 
         // szPath --> pszResHFile
         if (bOK && pszResHFile)
@@ -7981,11 +9137,17 @@ BOOL MMainWnd::DoExport(LPCWSTR pszRCFile, LPWSTR pszResHFile)
     else
     {
         // write the RC file
-        bOK = DoWriteRC(pszRCFile, NULL);
+        bOK = DoWriteRC(pszRCFile, NULL, found);
     }
 
     // resume the current directory
     SetCurrentDirectory(szCurDir);
+
+    if (bOK)
+    {
+        DoSetFileModified(FALSE);
+        m_nStatusStringID = IDS_FILESAVED;
+    }
 
     return bOK;
 }
@@ -8000,6 +9162,7 @@ BOOL MMainWnd::DoSaveResAs(LPCWSTR pszExeFile)
     if (g_res.extract_res(pszExeFile, g_res))
     {
         UpdateFileInfo(FT_RES, pszExeFile, FALSE);
+        DoSetFileModified(FALSE);
         return TRUE;
     }
     return FALSE;
@@ -8024,115 +9187,251 @@ BOOL MMainWnd::DoSaveAsCompression(LPCWSTR pszExeFile)
     return DoSaveExeAs(pszExeFile, TRUE);
 }
 
-// open the dialog to save the EXE file
-BOOL MMainWnd::DoSaveExeAs(LPCWSTR pszExeFile, BOOL bCompression)
+BOOL IsExeOrDll(LPCWSTR pszFileName)
 {
-    // check not locking
-    if (IsFileLockedDx(pszExeFile))
+    BYTE ab[2] = { 0, 0 };
+    if (FILE *fp = _wfopen(pszFileName, L"rb"))
     {
-        WCHAR szMsg[MAX_PATH + 256];
-        StringCchPrintfW(szMsg, _countof(szMsg), LoadStringDx(IDS_CANTWRITEBYLOCK), pszExeFile);
-        ErrorBoxDx(szMsg);
+        fread(ab, 2, 1, fp);
+        fclose(fp);
+    }
+
+    if (ab[0] == 'M' && ab[1] == 'Z')
+        return TRUE;
+    if (ab[0] == 'P' && ab[1] == 'E')
+        return TRUE;
+    return FALSE;
+}
+
+BOOL IsDotExe(LPCWSTR pszFileName)
+{
+    return lstrcmpiW(PathFindExtensionW(pszFileName), L".exe") == 0;
+}
+
+BOOL DumpTinyExeOrDll(HINSTANCE hInst, LPCWSTR pszFileName, INT nID)
+{
+    if (HRSRC hRsrc = FindResourceW(hInst, MAKEINTRESOURCEW(nID), RT_RCDATA))
+    {
+        if (HGLOBAL hGlobal = LoadResource(hInst, hRsrc))
+        {
+            if (LPVOID pvData = LockResource(hGlobal))
+            {
+                DWORD cbData = SizeofResource(hInst, hRsrc);
+                if (FILE *fp = _wfopen(pszFileName, L"wb"))
+                {
+                    size_t nOK = fwrite(pvData, cbData, 1, fp);
+                    fflush(fp);
+                    fclose(fp);
+
+                    return !!nOK;
+                }
+            }
+        }
+    }
+    return FALSE;
+}
+
+BOOL DoResetCheckSum(LPCWSTR pszExeFile)
+{
+    MByteStreamEx stream;
+    if (!stream.LoadFromFile(pszExeFile))
+    {
+        assert(0);
         return FALSE;
     }
 
-    // do backup
-    if (g_settings.bBackup)
+    if (stream.size() <= sizeof(IMAGE_DOS_SIGNATURE))
     {
-        DoBackupFile(pszExeFile);
+        assert(0);
+        return FALSE;
+    }
+
+    auto dos = stream.pointer<IMAGE_DOS_HEADER>();
+    IMAGE_NT_HEADERS *nt;
+    if (dos && dos->e_magic == IMAGE_DOS_SIGNATURE && dos->e_lfanew != 0)
+        nt = stream.pointer<IMAGE_NT_HEADERS>(dos->e_lfanew);
+    else
+        nt = stream.pointer<IMAGE_NT_HEADERS>();
+
+    if (!nt || nt->Signature != IMAGE_NT_SIGNATURE)
+    {
+        assert(0);
+        return FALSE;
+    }
+
+    IMAGE_NT_HEADERS32 *nt32 = reinterpret_cast<IMAGE_NT_HEADERS32 *>(nt);
+    IMAGE_NT_HEADERS64 *nt64 = reinterpret_cast<IMAGE_NT_HEADERS64 *>(nt);
+
+    IMAGE_FILE_HEADER *file = &nt->FileHeader;
+    IMAGE_OPTIONAL_HEADER32 *optional32 = NULL;
+    IMAGE_OPTIONAL_HEADER64 *optional64 = NULL;
+
+    switch (file->SizeOfOptionalHeader)
+    {
+    case sizeof(IMAGE_OPTIONAL_HEADER32):
+        optional32 = &nt32->OptionalHeader;
+        if (optional32->Magic != IMAGE_NT_OPTIONAL_HDR32_MAGIC)
+            return FALSE;
+        optional32->CheckSum = 0;
+        break;
+
+    case sizeof(IMAGE_OPTIONAL_HEADER64):
+        optional64 = &nt64->OptionalHeader;
+        if (optional64->Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC)
+            return FALSE;
+        optional64->CheckSum = 0;
+        break;
+
+    default:
+        assert(0);
+        return FALSE;
+    }
+
+    return stream.SaveToFile(pszExeFile);
+}
+
+BOOL MMainWnd::DoSaveInner(LPCWSTR pszExeFile, BOOL bCompression)
+{
+    // src is not exe and dest exe is respected
+    DoResetCheckSum(pszExeFile);
+
+    // Now the executable is updated. Wait a little for virus checker.
+    Sleep(300);
+
+    if (!g_res.update_exe(pszExeFile))
+    {
+        return FALSE;
+    }
+
+    // Now the executable is updated. Wait a little for virus checker.
+    Sleep(300);
+
+    // update file info
+    UpdateFileInfo(FT_EXECUTABLE, pszExeFile, m_bUpxCompressed);
+
+    // do compress by UPX
+    if (g_settings.bCompressByUPX || bCompression)
+    {
+        DoUpxCompress(m_szUpxExe, pszExeFile);
+    }
+
+    // is there any resource ID?
+    if (m_szResourceH[0] || !g_settings.id_map.empty())
+    {
+        // query
+        if (MsgBoxDx(IDS_WANNAGENRESH, MB_ICONINFORMATION | MB_YESNO) == IDYES)
+        {
+            // write the resource.h file
+            return DoWriteResHOfExe(pszExeFile);
+        }
+    }
+
+    DoSetFileModified(FALSE);
+
+    return TRUE;    // success
+}
+
+struct AutoDeleteFile
+{
+    LPCWSTR m_file;
+    AutoDeleteFile(LPCWSTR file) : m_file(file)
+    {
+    }
+    ~AutoDeleteFile()
+    {
+        DeleteFileW(m_file);
+    }
+};
+
+// open the dialog to save the EXE file
+BOOL MMainWnd::DoSaveExeAs(LPCWSTR pszExeFile, BOOL bCompression)
+{
+    LPCWSTR src = m_szFile;
+    LPCWSTR dest = pszExeFile;
+    WCHAR szTempFile[MAX_PATH] = L"";
+    AutoDeleteFile auto_delete(szTempFile);
+
+    // check not locking
+    if (IsFileLockedDx(dest))
+    {
+        WCHAR szMsg[MAX_PATH + 256];
+        StringCchPrintfW(szMsg, _countof(szMsg), LoadStringDx(IDS_CANTWRITEBYLOCK), dest);
+        ErrorBoxDx(szMsg);
+        return FALSE;
     }
 
     // is the file compressed?
     if (m_bUpxCompressed)
     {
         // build a temporary file path
-        WCHAR szTempFile[MAX_PATH];
         StringCchCopyW(szTempFile, _countof(szTempFile), GetTempFileNameDx(L"UPX"));
 
-        // m_szFile --> szTempFile (decompressed)
-        if (!CopyFileW(m_szFile, szTempFile, FALSE) ||
+        // src --> szTempFile (decompressed)
+        if (!CopyFileW(src, szTempFile, FALSE) ||
             !DoUpxDecompress(m_szUpxExe, szTempFile))
         {
-            DeleteFileW(szTempFile);
             ErrorBoxDx(IDS_CANTUPXEXTRACT);
             return FALSE;   // failure
         }
 
-        // szTempFile --> m_szFile
-        StringCchCopyW(m_szFile, _countof(m_szFile), szTempFile);
+        src = szTempFile;
+
+        // Now the executable is updated. Wait a little for virus checker.
+        Sleep(300);
+    }
+
+    // do backup the dest
+    if (g_settings.bBackup)
+    {
+        DoBackupFile(dest);
+
+        // Now the executable is updated. Wait a little for virus checker.
+        Sleep(300);
     }
 
     // check whether it is an executable or not
-    DWORD dwBinaryType;
-    BOOL bExecutable = ::GetBinaryTypeW(m_szFile, &dwBinaryType);
+    BOOL bSrcExecutable = IsExeOrDll(src);
+    BOOL bDestExecutable = IsExeOrDll(dest);
 
-    // is it not executable?
-    if (!bExecutable)
+    if (bSrcExecutable)
     {
-        // there is no source executable file. try to update pszExeFile
-        if (g_res.update_exe(pszExeFile))   // success
+        // copy src to dest (if src and dest are not same), then update resource
+        if (lstrcmpiW(src, dest) == 0 ||
+            CopyFileW(src, dest, FALSE))
         {
-            // update file info
-            UpdateFileInfo(FT_EXECUTABLE, pszExeFile, m_bUpxCompressed);
+            // Now the executable is updated. Wait a little for virus checker.
+            Sleep(300);
 
-            // do compress by UPX
-            if (g_settings.bCompressByUPX || bCompression)
-            {
-                DoUpxCompress(m_szUpxExe, pszExeFile);
-            }
-
-            // is there any resource ID?
-            if (m_szResourceH[0] || !g_settings.id_map.empty())
-            {
-                // query
-                if (MsgBoxDx(IDS_WANNAGENRESH, MB_ICONINFORMATION | MB_YESNO) == IDYES)
-                {
-                    // write the resource.h file
-                    return DoWriteResHOfExe(pszExeFile);
-                }
-            }
-
-            return TRUE;    // success
+            return DoSaveInner(dest, bCompression);
         }
     }
-    else    // it was an executable
+    else if (bDestExecutable)
     {
-        // build a temporary file path
-        LPWSTR TempFile = GetTempFileNameDx(L"ERE");
-
-        // m_szFile --> TempFile --> pszExeFile
-        if (::CopyFileW(m_szFile, TempFile, FALSE) &&
-            g_res.update_exe(TempFile) &&
-            ::CopyFileW(TempFile, pszExeFile, FALSE))
+        return DoSaveInner(dest, bCompression);
+    }
+    else
+    {
+        // if src and dest are non-executable, then dump tiny exe or dll to dest
+        if (IsDotExe(dest))
         {
-            // delete the temporary file
-            DeleteFileW(TempFile);
-
-            // update file info
-            UpdateFileInfo(FT_EXECUTABLE, pszExeFile, m_bUpxCompressed);
-
-            // do compress by UPX
-            if (g_settings.bCompressByUPX || bCompression)
+            if (DumpTinyExeOrDll(m_hInst, dest, IDR_TINYEXE))
             {
-                DoUpxCompress(m_szUpxExe, pszExeFile);
-            }
+                // Now the executable is updated. Wait a little for virus checker.
+                Sleep(300);
 
-            // is there any resource ID?
-            if (m_szResourceH[0] || !g_settings.id_map.empty())
-            {
-                // query
-                if (MsgBoxDx(IDS_WANNAGENRESH, MB_ICONINFORMATION | MB_YESNO) == IDYES)
-                {
-                    // write the resource.h file
-                    return DoWriteResHOfExe(pszExeFile);
-                }
+                return DoSaveInner(dest, bCompression);
             }
-
-            return TRUE;    // success
         }
+        else
+        {
+            if (DumpTinyExeOrDll(m_hInst, dest, IDR_TINYDLL))
+            {
+                // Now the executable is updated. Wait a little for virus checker.
+                Sleep(300);
 
-        // delete the temporary file
-        DeleteFileW(TempFile);
+                return DoSaveInner(dest, bCompression);
+            }
+        }
     }
 
     return FALSE;   // failure
@@ -8213,6 +9512,8 @@ IMPORT_RESULT MMainWnd::DoImportRes(HWND hwnd, LPCWSTR pszFile)
     // load it now
     m_bLoading = TRUE;
     {
+        ShowLangArrow(FALSE);
+
         // renewal
         g_res.merge(res);
 
@@ -8223,6 +9524,9 @@ IMPORT_RESULT MMainWnd::DoImportRes(HWND hwnd, LPCWSTR pszFile)
 
     // refresh the ID list window
     DoRefreshIDList(hwnd);
+
+    // update language arrow
+    PostUpdateLangArrow(hwnd);
 
     return IMPORTED;
 }
@@ -8249,6 +9553,8 @@ IMPORT_RESULT MMainWnd::DoImport(HWND hwnd, LPCWSTR pszFile, LPCWSTR pchDotExt)
             // select the entry
             SelectTV(ET_LANG, dialog, FALSE);
 
+            DoSetFileModified(TRUE);
+
             return IMPORTED;
         }
         return IMPORT_CANCELLED;
@@ -8266,6 +9572,42 @@ IMPORT_RESULT MMainWnd::DoImport(HWND hwnd, LPCWSTR pszFile, LPCWSTR pchDotExt)
             // select the entry
             SelectTV(ET_LANG, dialog, FALSE);
 
+            DoSetFileModified(TRUE);
+
+            return IMPORTED;
+        }
+        return IMPORT_CANCELLED;
+    }
+    else if (lstrcmpiW(pchDotExt, L".html") == 0 || lstrcmpiW(pchDotExt, L".htm") == 0)
+    {
+        // show the dialog
+        MAddResDlg dialog;
+        dialog.m_type = RT_HTML;
+        dialog.m_file = pszFile;
+        if (dialog.DialogBoxDx(hwnd) == IDOK)
+        {
+            // add a resource item
+            DoAddRes(hwnd, dialog);
+
+            DoSetFileModified(TRUE);
+
+            return IMPORTED;
+        }
+        return IMPORT_CANCELLED;
+    }
+    else if (lstrcmpiW(pchDotExt, L".manifest") == 0)
+    {
+        // show the dialog
+        MAddResDlg dialog;
+        dialog.m_type = RT_MANIFEST;
+        dialog.m_file = pszFile;
+        if (dialog.DialogBoxDx(hwnd) == IDOK)
+        {
+            // add a resource item
+            DoAddRes(hwnd, dialog);
+
+            DoSetFileModified(TRUE);
+
             return IMPORTED;
         }
         return IMPORT_CANCELLED;
@@ -8280,6 +9622,8 @@ IMPORT_RESULT MMainWnd::DoImport(HWND hwnd, LPCWSTR pszFile, LPCWSTR pchDotExt)
         {
             // add a resource item
             DoAddRes(hwnd, dialog);
+
+            DoSetFileModified(TRUE);
 
             return IMPORTED;
         }
@@ -8298,6 +9642,8 @@ IMPORT_RESULT MMainWnd::DoImport(HWND hwnd, LPCWSTR pszFile, LPCWSTR pchDotExt)
             // select the entry
             SelectTV(ET_LANG, dialog, FALSE);
 
+            DoSetFileModified(TRUE);
+
             return IMPORTED;
         }
         return IMPORT_CANCELLED;
@@ -8313,6 +9659,8 @@ IMPORT_RESULT MMainWnd::DoImport(HWND hwnd, LPCWSTR pszFile, LPCWSTR pchDotExt)
             // add a resource item
             DoAddRes(hwnd, dialog);
 
+            DoSetFileModified(TRUE);
+
             return IMPORTED;
         }
         return IMPORT_CANCELLED;
@@ -8327,6 +9675,8 @@ IMPORT_RESULT MMainWnd::DoImport(HWND hwnd, LPCWSTR pszFile, LPCWSTR pchDotExt)
         {
             // add a resource item
             DoAddRes(hwnd, dialog);
+
+            DoSetFileModified(TRUE);
 
             return IMPORTED;
         }
@@ -8344,6 +9694,8 @@ IMPORT_RESULT MMainWnd::DoImport(HWND hwnd, LPCWSTR pszFile, LPCWSTR pchDotExt)
             // add a resource item
             DoAddRes(hwnd, dialog);
 
+            DoSetFileModified(TRUE);
+
             return IMPORTED;
         }
         return IMPORT_CANCELLED;
@@ -8358,6 +9710,8 @@ IMPORT_RESULT MMainWnd::DoImport(HWND hwnd, LPCWSTR pszFile, LPCWSTR pchDotExt)
         {
             // add a resource item
             DoAddRes(hwnd, dialog);
+
+            DoSetFileModified(TRUE);
 
             return IMPORTED;
         }
@@ -8374,6 +9728,8 @@ IMPORT_RESULT MMainWnd::DoImport(HWND hwnd, LPCWSTR pszFile, LPCWSTR pchDotExt)
             // add a resource item
             DoAddRes(hwnd, dialog);
 
+            DoSetFileModified(TRUE);
+
             return IMPORTED;
         }
         return IMPORT_CANCELLED;
@@ -8388,6 +9744,8 @@ IMPORT_RESULT MMainWnd::DoImport(HWND hwnd, LPCWSTR pszFile, LPCWSTR pchDotExt)
         {
             // add a resource item
             DoAddRes(hwnd, dialog);
+
+            DoSetFileModified(TRUE);
 
             return IMPORTED;
         }
@@ -8404,6 +9762,42 @@ IMPORT_RESULT MMainWnd::DoImport(HWND hwnd, LPCWSTR pszFile, LPCWSTR pchDotExt)
             // add a resource item
             DoAddRes(hwnd, dialog);
 
+            DoSetFileModified(TRUE);
+
+            return IMPORTED;
+        }
+        return IMPORT_CANCELLED;
+    }
+    else if (lstrcmpiW(pchDotExt, L".dfm") == 0)
+    {
+        // show the dialog
+        MAddResDlg dialog;
+        dialog.m_file = pszFile;
+        dialog.m_type = RT_RCDATA;
+        if (dialog.DialogBoxDx(hwnd) == IDOK)
+        {
+            // add a resource item
+            DoAddRes(hwnd, dialog);
+
+            DoSetFileModified(TRUE);
+
+            return IMPORTED;
+        }
+        return IMPORT_CANCELLED;
+    }
+    else if (lstrcmpiW(pchDotExt, L".tlb") == 0)
+    {
+        // show the dialog
+        MAddResDlg dialog;
+        dialog.m_file = pszFile;
+        dialog.m_type = L"TYPELIB";
+        if (dialog.DialogBoxDx(hwnd) == IDOK)
+        {
+            // add a resource item
+            DoAddRes(hwnd, dialog);
+
+            DoSetFileModified(TRUE);
+
             return IMPORTED;
         }
         return IMPORT_CANCELLED;
@@ -8417,6 +9811,13 @@ void MMainWnd::OnDropFiles(HWND hwnd, HDROP hdrop)
 {
     MWaitCursor wait;
     ChangeStatusText(IDS_EXECUTINGCMD);     // executing command
+
+    // compile if necessary
+    if (!CompileIfNecessary(FALSE))
+    {
+        ChangeStatusText(IDS_READY);
+        return;
+    }
 
     // add the command lock
     ++m_nCommandLock;
@@ -8432,17 +9833,8 @@ void MMainWnd::OnDropFiles(HWND hwnd, HDROP hdrop)
     // make the window foreground
     SetForegroundWindow(hwnd);
 
-    // find the file title
-    pch = wcsrchr(file, L'\\');
-    if (pch == NULL)
-        pch = wcsrchr(file, L'/');
-    if (pch == NULL)
-        pch = file;
-    else
-        ++pch;
-
     // find the dot extension
-    pch = wcsrchr(pch, L'.');
+    pch = PathFindExtensionW(file);
 
     IMPORT_RESULT result = NOT_IMPORTABLE;
     if (pch)
@@ -8474,9 +9866,15 @@ void MMainWnd::OnDropFiles(HWND hwnd, HDROP hdrop)
     }
     else
     {
+        if (!DoQuerySaveChange(hwnd))
+            return;
+
         // otherwise, load the file
         DoLoadFile(hwnd, file);
     }
+
+    // update language arrow
+    PostUpdateLangArrow(hwnd);
 
     // remove the command lock
     --m_nCommandLock;
@@ -8503,14 +9901,11 @@ void MMainWnd::OnLoadResH(HWND hwnd)
         StringCchCopyW(szFile, _countof(szFile), L"resource.h");
 
     // if it does not exist, clear the file path
-    if (GetFileAttributesW(szFile) == INVALID_FILE_ATTRIBUTES)
+    if (!PathFileExistsW(szFile))
         szFile[0] = 0;
 
     // initialize OPENFILENAME structure
-    OPENFILENAMEW ofn;
-    ZeroMemory(&ofn, sizeof(ofn));
-    ofn.lStructSize = OPENFILENAME_SIZE_VERSION_400W;
-    ofn.hwndOwner = hwnd;
+    OPENFILENAMEW ofn = { OPENFILENAME_SIZE_VERSION_400W, hwnd };
     ofn.lpstrFilter = MakeFilterDx(LoadStringDx(IDS_HEADFILTER));
     ofn.lpstrFile = szFile;
     ofn.nMaxFile = _countof(szFile);
@@ -8552,11 +9947,33 @@ void MMainWnd::OnLoadResHBang(HWND hwnd)
     }
 }
 
+void MMainWnd::OnClose(HWND hwnd)
+{
+    // compile if necessary
+    if (!CompileIfNecessary(FALSE))
+        return;
+
+    if (DoQuerySaveChange(hwnd))
+        DestroyWindow(hwnd);
+}
+
 // WM_DESTROY: the main window has been destroyed
 void MMainWnd::OnDestroy(HWND hwnd)
 {
-    // clear all
-    OnNew(hwnd);
+    // close preview
+    HidePreview();
+
+    // unload the resource.h file
+    OnUnloadResH(hwnd);
+
+    // update the file info
+    UpdateFileInfo(FT_NONE, NULL, FALSE);
+
+    // unselect
+    SelectTV(NULL, FALSE);
+
+    // clean up
+    g_res.delete_all();
 
     // save the settings
     SaveSettings(hwnd);
@@ -8582,8 +9999,8 @@ void MMainWnd::OnDestroy(HWND hwnd)
 
     // destroy the window's
     DestroyWindow(m_rad_window);
-    DestroyWindow(m_hBinEdit);
-    DestroyWindow(m_hSrcEdit);
+    DestroyWindow(m_hHexViewer);
+    DestroyWindow(m_hCodeEditor);
     m_hBmpView.DestroyView();
     DestroyWindow(m_hBmpView);
     DestroyWindow(m_id_list_dlg);
@@ -8595,7 +10012,8 @@ void MMainWnd::OnDestroy(HWND hwnd)
 
     DestroyWindow(m_splitter1);
     DestroyWindow(m_splitter2);
-    DestroyWindow(m_splitter3);
+
+    s_hMainWnd = NULL;
 
     // post WM_QUIT message to quit the application
     PostQuitMessage(0);
@@ -8628,7 +10046,7 @@ BOOL MMainWnd::ParseMacros(HWND hwnd, LPCTSTR pszFile,
         StringScanner scanner(line);
 
         // tokenize it
-        TokenStream stream(scanner);
+        MacroParser::TokenStream stream(scanner);
         stream.read_tokens();
 
         // and parse it
@@ -8672,7 +10090,6 @@ BOOL MMainWnd::ParseMacros(HWND hwnd, LPCTSTR pszFile,
     // clear the resource IDs in the constants database
     auto& table = g_db.m_map[L"RESOURCE.ID"];
     table.clear();
-    g_settings.bHasIDC_STATIC = FALSE;
 
     // add the resource ID entries to the "RESOURCE.ID" table from the ID mapping
     for (auto& pair : g_settings.id_map)
@@ -8682,8 +10099,6 @@ BOOL MMainWnd::ParseMacros(HWND hwnd, LPCTSTR pszFile,
         DWORD value2 = mstr_parse_int(str2.c_str());
         ConstantsDB::EntryType entry(str1, value2);
         table.push_back(entry);
-        if (str1 == L"IDC_STATIC")
-            g_settings.bHasIDC_STATIC = TRUE;
     }
 
     // add IDC_STATIC macro
@@ -8766,24 +10181,22 @@ BOOL MMainWnd::ParseResH(HWND hwnd, LPCTSTR pszFile, const char *psz, DWORD len)
         StringCchPrintfA(buf, _countof(buf), "%s\n", macros[i].c_str());
         file1.WriteSzA(buf, &cbWritten);
     }
+    file1.FlushFileBuffers();
     file1.CloseHandle();    // close the handle
 
     // build the command line text
     MString strCmdLine;
     strCmdLine += L'\"';
-    strCmdLine += m_szCppExe;       // cpp.exe
+    strCmdLine += m_szMCppExe;       // mcpp.exe
     strCmdLine += L"\" ";
     strCmdLine += GetIncludesDump();
     strCmdLine += GetMacroDump();
-    strCmdLine += L" -E \"";
+    strCmdLine += L" \"";
     strCmdLine += szTempFile1;
     strCmdLine += L'\"';
     //MessageBoxW(hwnd, strCmdLine.c_str(), NULL, 0);
 
     BOOL bOK = FALSE;
-
-    // wait for the file operation
-    Sleep(FILE_WAIT_TIME);
 
     // create a cpp.exe process
     MProcessMaker pmaker;
@@ -8841,13 +10254,15 @@ BOOL MMainWnd::DoLoadResH(HWND hwnd, LPCTSTR pszFile)
     // build a command line
     MString strCmdLine;
     strCmdLine += L'"';
-    strCmdLine += m_szCppExe;
-    strCmdLine += L"\" -E -dM -DRC_INVOKED -o \"";
+    strCmdLine += m_szMCppExe;
+    strCmdLine += L"\" -dM -DRC_INVOKED -o \"";
     strCmdLine += szTempFile;
-    strCmdLine += L"\" -x none \"";
+    strCmdLine += L"\" \"-I";
+    strCmdLine += m_szIncludeDir;
+    strCmdLine += L"\" \"";
     strCmdLine += pszFile;
     strCmdLine += L"\"";
-    //MessageBoxW(hwnd, szCmdLine, NULL, 0);
+    //MessageBoxW(hwnd, strCmdLine.c_str(), NULL, 0);
 
     BOOL bOK = FALSE;
 
@@ -8943,15 +10358,12 @@ void MMainWnd::OnAdviceResH(HWND hwnd)
     if (!g_settings.added_ids.empty() &&
         (g_settings.added_ids.size() != 1 ||
          g_settings.added_ids.find("IDC_STATIC") == g_settings.added_ids.end() ||
-         !g_settings.bHasIDC_STATIC))
+         !g_settings.bUseIDC_STATIC))
     {
         str += LoadStringDx(IDS_ADDNEXTIDS);
 
         for (auto& pair : g_settings.added_ids)
         {
-            if (pair.first == "IDC_STATIC" && g_settings.bHasIDC_STATIC)
-                continue;
-
             str += TEXT("#define ");
             str += MAnsiToText(CP_ACP, pair.first).c_str();
             str += TEXT(" ");
@@ -9004,12 +10416,18 @@ void MMainWnd::OnConfig(HWND hwnd)
         ReCreateFonts(hwnd);
 
         // update the labels of the entries
-        UpdateNames();
+        UpdateNames(FALSE);
 
         // select the entry to update the text
         auto entry = g_res.get_entry();
         SelectTV(entry, FALSE);
+
+        // update title bar
+        UpdateTitleBar();
     }
+
+    // update menu
+    UpdateMenu();
 }
 
 // reset the path settings
@@ -9031,14 +10449,14 @@ void MMainWnd::ReSetPaths(HWND hwnd)
     // cpp.exe
     if (g_settings.strCppExe.size())
     {
-        // g_settings.strCppExe --> m_szCppExe
-        StringCchCopy(m_szCppExe, _countof(m_szCppExe), g_settings.strCppExe.c_str());
+        // g_settings.strCppExe --> m_szMCppExe
+        StringCchCopy(m_szMCppExe, _countof(m_szMCppExe), g_settings.strCppExe.c_str());
     }
     else
     {
-        // m_szDataFolder + "\\bin\\cpp.exe" --> m_szCppExe
-        StringCchCopyW(m_szCppExe, _countof(m_szCppExe), m_szDataFolder);
-        StringCchCatW(m_szCppExe, _countof(m_szCppExe), L"\\bin\\cpp.exe");
+        // m_szDataFolder + "\\bin\\cpp.exe" --> m_szMCppExe
+        StringCchCopyW(m_szMCppExe, _countof(m_szMCppExe), m_szDataFolder);
+        StringCchCatW(m_szMCppExe, _countof(m_szMCppExe), L"\\bin\\mcpp.exe");
     }
 }
 
@@ -9046,17 +10464,17 @@ void MMainWnd::ReSetPaths(HWND hwnd)
 void MMainWnd::OnUseIDC_STATIC(HWND hwnd)
 {
     // toggle the flag
-    g_settings.bHasIDC_STATIC = !g_settings.bHasIDC_STATIC;
+    g_settings.bUseIDC_STATIC = !g_settings.bUseIDC_STATIC;
 
     // select the entry to update the text
     auto entry = g_res.get_entry();
-    SelectTV(entry, FALSE);
+    SelectTV(entry, FALSE, STV_RESETTEXT);
 }
 
 // update the name of the tree control
-void MMainWnd::UpdateNames(void)
+void MMainWnd::UpdateNames(BOOL bModified)
 {
-    EntrySetBase found;
+    EntrySet found;
     g_res.search(found, ET_NAME);
 
     for (auto entry : found)
@@ -9066,6 +10484,9 @@ void MMainWnd::UpdateNames(void)
 
     auto entry = g_res.get_entry();
     SelectTV(entry, FALSE);
+
+    if (bModified)
+        DoSetFileModified(TRUE);
 }
 
 void MMainWnd::UpdateEntryName(EntryBase *e, LPWSTR pszText)
@@ -9102,6 +10523,8 @@ void MMainWnd::UpdateEntryLang(EntryBase *e, LPWSTR pszText)
     // update pszText if any
     if (pszText)
         StringCchCopyW(pszText, MAX_PATH, item.pszText);
+
+    DoSetFileModified(TRUE);
 }
 
 // show/hide the ID macros
@@ -9112,13 +10535,32 @@ void MMainWnd::OnHideIDMacros(HWND hwnd)
     // toggle the flag
     g_settings.bHideID = !g_settings.bHideID;
 
-    UpdateNames();
+    UpdateNames(FALSE);
 
     ShowIDList(hwnd, bListOpen);
 
     // select the entry to update the text
     auto entry = g_res.get_entry();
     SelectTV(entry, FALSE);
+}
+
+void MMainWnd::OnDfmSettings(HWND hwnd)
+{
+    // compile if necessary
+    if (!CompileIfNecessary(TRUE))
+        return;
+
+    MDfmSettingsDlg dialog;
+    if (dialog.DialogBoxDx(hwnd) == IDOK)
+    {
+        g_settings.nDfmCodePage = dialog.m_nCodePage;
+        g_settings.bDfmRawTextComments = dialog.m_bComments;
+        g_settings.bDfmNoUnicode = dialog.m_bNoUnicode;
+
+        // select the entry to update the text
+        auto entry = g_res.get_entry();
+        SelectTV(entry, FALSE);
+    }
 }
 
 // show/hide the ID list window
@@ -9128,12 +10570,13 @@ void MMainWnd::ShowIDList(HWND hwnd, BOOL bShow/* = TRUE*/)
     {
         if (IsWindow(m_id_list_dlg))
             DestroyWindow(m_id_list_dlg);
-        m_id_list_dlg.CreateDialogDx(NULL);
+        m_id_list_dlg.CreateDialogDx(hwnd);
         ShowWindow(m_id_list_dlg, SW_SHOWNOACTIVATE);
         UpdateWindow(m_id_list_dlg);
     }
     else
     {
+        ShowWindow(m_id_list_dlg, SW_HIDE);
         DestroyWindow(m_id_list_dlg);
     }
 }
@@ -9251,6 +10694,8 @@ void MMainWnd::OnPredefMacros(HWND hwnd)
 // expand all the tree control items
 void MMainWnd::OnExpandAll(HWND hwnd)
 {
+    ShowLangArrow(FALSE);
+
     // get the selected entry
     auto entry = g_res.get_entry();
 
@@ -9263,13 +10708,15 @@ void MMainWnd::OnExpandAll(HWND hwnd)
 
     // select the entry
     SelectTV(entry, FALSE);
+
+    // update language arrow
+    PostUpdateLangArrow(hwnd);
 }
 
 // unexpand all the tree control items
 void MMainWnd::OnCollapseAll(HWND hwnd)
 {
-    // get the selected entry
-    auto entry = g_res.get_entry();
+    ShowLangArrow(FALSE);
 
     HTREEITEM hItem = TreeView_GetRoot(m_hwndTV);
     do
@@ -9279,18 +10726,21 @@ void MMainWnd::OnCollapseAll(HWND hwnd)
     } while (hItem);
 
     // select the entry
-    SelectTV(entry, FALSE);
+    SelectTV(NULL, FALSE);
+
+    // update language arrow
+    PostUpdateLangArrow(hwnd);
 }
 
 void MMainWnd::OnSrcEditSelect(HWND hwnd)
 {
-    INT iItem = m_hSrcEdit.m_iItemToBeSelected;
+    INT iItem = m_hCodeEditor.m_iItemToBeSelected;
     if (iItem != -1)
     {
         MRadCtrl::DeselectSelection();
         MRadCtrl::SelectByIndex(iItem);
 
-        m_hSrcEdit.m_iItemToBeSelected = -1;
+        m_hCodeEditor.m_iItemToBeSelected = -1;
     }
 }
 
@@ -9375,12 +10825,17 @@ void MMainWnd::OnClone(HWND hwnd)
     }
 }
 
-void MMainWnd::OnJumpToMatome(HWND hwnd)
+void MMainWnd::OnGuide(HWND hwnd)
 {
-    static const WCHAR szURL[] =
-        L"https://katahiromz.web.fc2.com/re/matome/";
+    static const WCHAR szJapaneseURL[] =
+        L"https://katahiromz.web.fc2.com/colony3rd/risoheditor/";
+    static const WCHAR szEnglishURL[] =
+        L"https://katahiromz.web.fc2.com/colony3rd/risoheditor/en/";
 
-    ShellExecuteW(hwnd, NULL, szURL, NULL, NULL, SW_SHOWNORMAL);
+    if (PRIMARYLANGID(GetUserDefaultLangID()) == LANG_JAPANESE)
+        ShellExecuteW(hwnd, NULL, szJapaneseURL, NULL, NULL, SW_SHOWNORMAL);
+    else
+        ShellExecuteW(hwnd, NULL, szEnglishURL, NULL, NULL, SW_SHOWNORMAL);
 }
 
 void MMainWnd::OnEncoding(HWND hwnd)
@@ -9396,6 +10851,16 @@ void MMainWnd::OnEncoding(HWND hwnd)
         auto entry = g_res.get_entry();
         SelectTV(entry, FALSE);
     }
+}
+
+void MMainWnd::OnQueryConstant(HWND hwnd)
+{
+    // compile if necessary
+    if (!CompileIfNecessary(FALSE))
+        return;
+
+    MConstantDlg dialog;
+    dialog.DialogBoxDx(hwnd);
 }
 
 void MMainWnd::OnExtractBang(HWND hwnd)
@@ -9428,6 +10893,14 @@ void MMainWnd::OnExtractBang(HWND hwnd)
         {
             OnExtractBitmap(hwnd);
         }
+        else if (entry->m_type == RT_RCDATA && entry->is_delphi_dfm())
+        {
+            OnExtractDFM(hwnd);
+        }
+        else if (entry->m_type == L"TYPELIB")
+        {
+            OnExtractTLB(hwnd);
+        }
         else
         {
             OnExtractBin(hwnd);
@@ -9445,7 +10918,7 @@ void MMainWnd::OnSaveAsWithCompression(HWND hwnd)
     {
         RFFI2_NONE = 0,
         RFFI2_EXECUTABLE = 1,
-        RFFI2_ALL = 3
+        RFFI2_ALL = 2
     };
 
     // compile if necessary
@@ -9457,29 +10930,28 @@ void MMainWnd::OnSaveAsWithCompression(HWND hwnd)
     StringCchCopyW(szFile, _countof(szFile), m_szFile);
 
     // if not found, then make it empty
-    if (GetFileAttributesW(szFile) == INVALID_FILE_ATTRIBUTES)
+    if (!PathFileExistsW(szFile))
         szFile[0] = 0;
 
-    // was it an executable?
-    BOOL bWasExecutable = (m_file_type == FT_EXECUTABLE);
-    if (!bWasExecutable)
-    {
-        ErrorBoxDx(IDS_CANTSAVETOEXE);
-        return;
-    }
-
     // initialize OPENFILENAME structure
-    OPENFILENAMEW ofn;
-    ZeroMemory(&ofn, sizeof(ofn));
-    ofn.lStructSize = OPENFILENAME_SIZE_VERSION_400W;
-    ofn.hwndOwner = hwnd;
-    ofn.lpstrFilter = MakeFilterDx(LoadStringDx(IDS_EXERESFILTER));
+    OPENFILENAMEW ofn = { OPENFILENAME_SIZE_VERSION_400W, hwnd };
+    ofn.lpstrFilter = MakeFilterDx(LoadStringDx(IDS_EXEFILTER));
 
     // use the prefered filter by the entry
     ofn.nFilterIndex = RFFI2_EXECUTABLE;
 
     // use the preferred extension
-    ofn.lpstrDefExt = L"exe";       // the default extension
+    WCHAR szExt[32];
+    LPWSTR pchDotExt = PathFindExtensionW(m_szFile);
+    if (pchDotExt && *pchDotExt == L'.')
+    {
+        StringCbCopyW(szExt, sizeof(szExt), pchDotExt + 1);
+        ofn.lpstrDefExt = szExt;
+    }
+    else
+    {
+        ofn.lpstrDefExt = L"exe";       // the default extension
+    }
 
     ofn.lpstrFile = szFile;
     ofn.nMaxFile = _countof(szFile);
@@ -9501,8 +10973,14 @@ void MMainWnd::OnSaveAsWithCompression(HWND hwnd)
 // toggle the word wrapping of the source EDIT control
 void MMainWnd::OnWordWrap(HWND hwnd)
 {
+    // save the modified flag
+    BOOL bModified = Edit_GetModify(m_hCodeEditor);
+
     // switch the flag
     g_settings.bWordWrap = !g_settings.bWordWrap;
+
+    // get text
+    MString strText = GetWindowTextW(m_hCodeEditor);
 
     // create the source EDIT control
     ReCreateSrcEdit(hwnd);
@@ -9510,9 +10988,30 @@ void MMainWnd::OnWordWrap(HWND hwnd)
     // reset fonts
     ReCreateFonts(hwnd);
 
-    // select the entry
+    // restore text
+    SetWindowTextW(m_hCodeEditor, strText.c_str());
+
+    // restore the modified flag
+    Edit_SetModify(m_hCodeEditor, bModified);
+
+    // select the entry to refresh
     auto entry = g_res.get_entry();
-    SelectTV(entry, FALSE);
+    SelectTV(entry, FALSE, STV_DONTRESET);
+}
+
+void MMainWnd::OnUseBeginEnd(HWND hwnd)
+{
+    g_settings.bUseBeginEnd = !g_settings.bUseBeginEnd;
+
+    // create the source EDIT control
+    ReCreateSrcEdit(hwnd);
+
+    // reset fonts
+    ReCreateFonts(hwnd);
+
+    // select the entry to refresh
+    auto entry = g_res.get_entry();
+    SelectTV(entry, FALSE, STV_RESETTEXT);
 }
 
 // expand the treeview items
@@ -9529,6 +11028,36 @@ void MMainWnd::Expand(HTREEITEM hItem)
     } while (hItem);
 }
 
+void MMainWnd::UpdateLangArrow()
+{
+    EntryBase *entry = g_res.get_entry();
+    if (!entry)
+    {
+        HTREEITEM hItem = TreeView_GetSelection(m_hwndTV);
+        ShowLangArrow(FALSE, hItem);
+        return;
+    }
+
+    HTREEITEM hItem = entry->m_hItem;
+
+    switch (entry->m_et)
+    {
+    case ET_LANG:
+        if (entry->m_type != RT_STRING && entry->m_type != RT_MESSAGETABLE)
+            ShowLangArrow(TRUE, hItem);
+        else
+            ShowLangArrow(FALSE, hItem);
+        break;
+    case ET_STRING:
+    case ET_MESSAGE:
+        ShowLangArrow(TRUE, hItem);
+        break;
+    default:
+        ShowLangArrow(FALSE, hItem);
+        break;
+    }
+}
+
 // unexpand the treeview items
 void MMainWnd::Collapse(HTREEITEM hItem)
 {
@@ -9543,12 +11072,22 @@ void MMainWnd::Collapse(HTREEITEM hItem)
     } while (hItem);
 }
 
+void MMainWnd::OnRefreshAll(HWND hwnd)
+{
+    BOOL bModifiedOld = s_bModified;
+    DoRefreshTV(hwnd);
+    DoRefreshIDList(hwnd);
+    s_bModified = bModifiedOld;
+
+    PostUpdateLangArrow(hwnd);
+}
+
 // WM_COMMAND
 void MMainWnd::OnCommand(HWND hwnd, int id, HWND hwndCtl, UINT codeNotify)
 {
     MWaitCursor wait;
 
-    if (codeNotify == EN_CHANGE && m_hSrcEdit == hwndCtl)
+    if (codeNotify == EN_CHANGE && m_hCodeEditor == hwndCtl)
     {
         // the source EDIT control was modified.
         // change the toolbar
@@ -9647,7 +11186,7 @@ void MMainWnd::OnCommand(HWND hwnd, int id, HWND hwndCtl, UINT codeNotify)
         break;
     case ID_DELCTRL:
         MRadCtrl::DeleteSelection();
-        m_hSrcEdit.ClearIndeces();
+        m_hCodeEditor.ClearIndeces();
         break;
     case ID_ADDCTRL:
         m_rad_window.OnAddCtrl(m_rad_window);
@@ -9660,19 +11199,19 @@ void MMainWnd::OnCommand(HWND hwnd, int id, HWND hwndCtl, UINT codeNotify)
         break;
     case ID_CTRLINDEXTOP:
         m_rad_window.IndexTop(m_rad_window);
-        m_hSrcEdit.ClearIndeces();
+        m_hCodeEditor.ClearIndeces();
         break;
     case ID_CTRLINDEXBOTTOM:
         m_rad_window.IndexBottom(m_rad_window);
-        m_hSrcEdit.ClearIndeces();
+        m_hCodeEditor.ClearIndeces();
         break;
     case ID_CTRLINDEXMINUS:
         m_rad_window.IndexMinus(m_rad_window);
-        m_hSrcEdit.ClearIndeces();
+        m_hCodeEditor.ClearIndeces();
         break;
     case ID_CTRLINDEXPLUS:
         m_rad_window.IndexPlus(m_rad_window);
-        m_hSrcEdit.ClearIndeces();
+        m_hCodeEditor.ClearIndeces();
         break;
     case ID_SHOWHIDEINDEX:
         m_rad_window.OnShowHideIndex(m_rad_window);
@@ -9706,9 +11245,9 @@ void MMainWnd::OnCommand(HWND hwnd, int id, HWND hwndCtl, UINT codeNotify)
     case ID_BINARYPANE:
         // toggle the flag
         g_settings.bShowBinEdit = !g_settings.bShowBinEdit;
-
-        // show/hide the binary EDIT control
-        ShowBinEdit(g_settings.bShowBinEdit);
+        // show/hide the binary
+        m_tab.SetCurSel(!!g_settings.bShowBinEdit);
+        OnSelChange(hwnd, !!g_settings.bShowBinEdit);
         break;
     case ID_ALWAYSCONTROL:
         {
@@ -9795,7 +11334,6 @@ void MMainWnd::OnCommand(HWND hwnd, int id, HWND hwndCtl, UINT codeNotify)
         OnFindPrev(hwnd);
         break;
     case ID_REPLACE:
-        OnReplace(hwnd);
         break;
     case ID_ADDMENU:
         OnAddMenu(hwnd);
@@ -9830,9 +11368,6 @@ void MMainWnd::OnCommand(HWND hwnd, int id, HWND hwndCtl, UINT codeNotify)
     case ID_ITEMSEARCH:
         OnItemSearch(hwnd);
         break;
-    case ID_ITEMSEARCHBANG:
-        OnItemSearchBang(hwnd, reinterpret_cast<MItemSearchDlg *>(hwndCtl));
-        break;
     case ID_UPDATERESHBANG:
         OnUpdateResHBang(hwnd);
         break;
@@ -9852,8 +11387,7 @@ void MMainWnd::OnCommand(HWND hwnd, int id, HWND hwndCtl, UINT codeNotify)
         m_rad_window.OnRefresh(m_rad_window);
         break;
     case ID_REFRESHALL:
-        DoRefreshTV(hwnd);
-        DoRefreshIDList(hwnd);
+        OnRefreshAll(hwnd);
         break;
     case ID_EXPORT:
         OnExport(hwnd);
@@ -9905,11 +11439,68 @@ void MMainWnd::OnCommand(HWND hwnd, int id, HWND hwndCtl, UINT codeNotify)
     case ID_EXTRACTBANG:
         OnExtractBang(hwnd);
         break;
-    case ID_JUMPTOMATOME:
-        OnJumpToMatome(hwnd);
+    case ID_GUIDE:
+        OnGuide(hwnd);
         break;
     case ID_ENCODING:
         OnEncoding(hwnd);
+        break;
+    case ID_QUERYCONSTANT:
+        OnQueryConstant(hwnd);
+        break;
+    case ID_USEBEGINEND:
+        OnUseBeginEnd(hwnd);
+        break;
+    case ID_SAVE:
+        OnSave(hwnd);
+        break;
+    case ID_EGA:
+        OnEga(hwnd);
+        break;
+    case ID_EGA_PROGRAM:
+        OnEgaProgram(hwnd);
+        break;
+    case ID_OPENREADMEIT:
+        OnOpenReadMeIt(hwnd);
+        break;
+    case ID_OPEN_EGA_MANUAL:
+        OnOpenEgaManual(hwnd);
+        break;
+    case ID_REPLACE_DIALOG_FONTS:
+        OnReplaceDialogFonts(hwnd);
+        break;
+    case ID_HELP:
+        OnHelp(hwnd);
+        break;
+    case ID_NEXTPANE:
+        OnNextPane(hwnd, TRUE);
+        break;
+    case ID_PREVPANE:
+        OnNextPane(hwnd, FALSE);
+        break;
+    case ID_EXTRACTRC:
+        OnExtractRC(hwnd);
+        break;
+    case ID_EXPORTRES:
+        OnExportRes(hwnd);
+        break;
+    case ID_CHECKUPDATE:
+        OnCheckUpdate(hwnd);
+        break;
+    case ID_DFMSETTINGS:
+        OnDfmSettings(hwnd);
+        break;
+    case ID_AUTOCOMPLETE:
+        {
+            HWND hwndEdit = TreeView_GetEditControl(m_hwndTV);
+            DoLangEditAutoComplete(hwnd, hwndEdit);
+        }
+        break;
+    case ID_AUTOCOMPLETEDONE:
+        DoLangEditAutoCompleteRelease(hwnd);
+        break;
+    case ID_OPENREADMEKO:
+        OnOpenReadMeKo(hwnd);
         break;
     default:
         bUpdateStatus = FALSE;
@@ -9926,9 +11517,19 @@ void MMainWnd::OnCommand(HWND hwnd, int id, HWND hwndCtl, UINT codeNotify)
 
     // show "ready" status if ready
     if (m_nCommandLock == 0 && bUpdateStatus && !::IsWindow(m_rad_window))
-        ChangeStatusText(IDS_READY);
+    {
+        if (m_nStatusStringID != 0)
+        {
+            ChangeStatusText(m_nStatusStringID);
+            m_nStatusStringID = 0;
+        }
+        else
+        {
+            ChangeStatusText(IDS_READY);
+        }
+    }
 
-#if !defined(NDEBUG) && (WINVER >= 0x0500)
+#if 0 && !defined(NDEBUG) && (WINVER >= 0x0500)
     // show object counts (for debugging purpose)
     HANDLE hProcess = GetCurrentProcess();
     TCHAR szText[64];
@@ -9991,29 +11592,101 @@ std::vector<INT> GetPrefixIndexes(const MString& prefix)
     return ret;
 }
 
+BOOL MMainWnd::ShowLangArrow(BOOL bShow, HTREEITEM hItem)
+{
+    if (IsWindow(m_arrow))
+        DestroyWindow(m_arrow);
+
+    auto entry = g_res.get_entry();
+    if (!entry)
+    {
+        return FALSE;
+    }
+
+    if (hItem == NULL)
+    {
+        hItem = TreeView_GetSelection(m_hwndTV);
+    }
+
+    RECT rc;
+    TreeView_GetItemRect(m_hwndTV, hItem, &rc, TRUE);
+
+    RECT rcClient;
+    GetClientRect(m_hwndTV, &rcClient);
+    SIZE siz = m_arrow.GetArrowSize(&rc);
+    LONG x = rcClient.right - siz.cx;
+    LONG y = rc.top;
+
+    m_arrow.ShowDropDownList(m_arrow, FALSE);
+
+    if (bShow)
+    {
+        m_arrow.CreateAsChildDx(m_hwndTV, NULL, WS_CHILD | WS_VISIBLE,
+            0, -1, x, y);
+        m_arrow.m_hwndMain = m_hwnd;
+        m_arrow.SendMessageDx(MYWM_SETITEMRECT, 0, (LPARAM)&rc);
+    }
+
+    return TRUE;
+}
+
+void MMainWnd::DoLangEditAutoCompleteRelease(HWND hwnd)
+{
+    if (m_pAutoComplete)
+    {
+        m_pAutoComplete->unbind();
+        m_pAutoComplete->Release();
+        m_pAutoComplete = NULL;
+    }
+
+    m_auto_comp_edit.unhook();
+}
+
+void MMainWnd::DoLangEditAutoComplete(HWND hwnd, HWND hwndEdit)
+{
+    DoLangEditAutoCompleteRelease(hwnd);
+
+    m_pAutoComplete = new MLangAutoComplete();
+    if (!m_pAutoComplete)
+        return;
+
+    m_pAutoComplete->AddRef();
+    m_pAutoComplete->bind(hwndEdit);
+    m_auto_comp_edit.hook(hwndEdit, m_hwndTV);
+    m_auto_comp_edit.m_bAdjustSize = TRUE;
+}
+
 // WM_NOTIFY
 LRESULT MMainWnd::OnNotify(HWND hwnd, int idFrom, NMHDR *pnmhdr)
 {
     // get the selected entry
     auto entry = g_res.get_entry();
 
-    if (pnmhdr->code == MSplitterWnd::NOTIFY_CHANGED)
+    if (pnmhdr->code == TCN_SELCHANGE)
+    {
+        if (pnmhdr->hwndFrom == m_tab)
+        {
+            INT iSelected = m_tab.GetCurSel();
+            OnSelChange(hwnd, iSelected);
+        }
+    }
+    else if (pnmhdr->code == MSplitterWnd::NOTIFY_CHANGED)
     {
         MWaitCursor wait;
         if (pnmhdr->hwndFrom == m_splitter1)
         {
-            if (m_splitter1.GetPaneCount() >= 1)
+            if (m_splitter1.GetPaneCount() >= 2)
+            {
                 g_settings.nTreeViewWidth = m_splitter1.GetPaneExtent(0);
+
+                // relayout
+                PostMessage(hwnd, WM_SIZE, 0, 0);
+            }
         }
         else if (pnmhdr->hwndFrom == m_splitter2)
         {
             if (m_splitter2.GetPaneCount() >= 2)
-                g_settings.nBinEditHeight = m_splitter2.GetPaneExtent(1);
-        }
-        else if (pnmhdr->hwndFrom == m_splitter3)
-        {
-            if (m_splitter3.GetPaneCount() >= 2)
-                g_settings.nBmpViewWidth = m_splitter3.GetPaneExtent(1);
+                g_settings.nBmpViewWidth = m_splitter2.GetPaneExtent(1);
         }
     }
     else if (pnmhdr->code == TVN_DELETEITEM)
@@ -10022,6 +11695,7 @@ LRESULT MMainWnd::OnNotify(HWND hwnd, int idFrom, NMHDR *pnmhdr)
         auto ptv = (NM_TREEVIEW *)pnmhdr;
         auto entry = (EntryBase *)ptv->itemOld.lParam;
         g_res.on_delete_item(entry);
+        DoSetFileModified(TRUE);
     }
     else if (pnmhdr->code == NM_DBLCLK)
     {
@@ -10051,6 +11725,8 @@ LRESULT MMainWnd::OnNotify(HWND hwnd, int idFrom, NMHDR *pnmhdr)
                     OnGuiEdit(hwnd);
                 }
                 return 1;
+            default:
+                break;
             }
         }
     }
@@ -10073,11 +11749,21 @@ LRESULT MMainWnd::OnNotify(HWND hwnd, int idFrom, NMHDR *pnmhdr)
         MWaitCursor wait;
         if (!m_bLoading && entry)
         {
-            NM_TREEVIEWW *pTV = (NM_TREEVIEWW *)pnmhdr;
-
             // select the entry to update the text
             SelectTV(entry, FALSE);
+            OnSelChange(hwnd, 0);
+
+            PostUpdateLangArrow(hwnd);
         }
+    }
+    else if (pnmhdr->code == TVN_ITEMEXPANDING)
+    {
+        m_arrow.ShowDropDownList(m_arrow, FALSE);
+        ShowLangArrow(FALSE);
+    }
+    else if (pnmhdr->code == TVN_ITEMEXPANDED)
+    {
+        PostUpdateLangArrow(hwnd);
     }
     else if (pnmhdr->code == NM_RETURN)
     {
@@ -10107,6 +11793,8 @@ LRESULT MMainWnd::OnNotify(HWND hwnd, int idFrom, NMHDR *pnmhdr)
                     OnGuiEdit(hwnd);
                 }
                 return 1;
+            default:
+                break;
             }
         }
     }
@@ -10118,7 +11806,13 @@ LRESULT MMainWnd::OnNotify(HWND hwnd, int idFrom, NMHDR *pnmhdr)
         {
         case VK_DELETE:
             PostMessageW(hwnd, WM_COMMAND, ID_DELETERES, 0);
+            DoSetFileModified(TRUE);
             return TRUE;
+        case VK_LEFT:
+        case VK_RIGHT:
+            ShowLangArrow(FALSE);
+            PostUpdateLangArrow(hwnd);
+            break;
         case VK_F2:
             {
                 // compile if necessary
@@ -10172,9 +11866,13 @@ LRESULT MMainWnd::OnNotify(HWND hwnd, int idFrom, NMHDR *pnmhdr)
             MWaitCursor wait;
             auto pInfo = (TV_DISPINFO *)pnmhdr;
             LPARAM lParam = pInfo->item.lParam;
-            HTREEITEM hItem = pInfo->item.hItem;
             LPWSTR pszOldText = pInfo->item.pszText;
             //MessageBoxW(NULL, pszOldText, NULL, 0);
+
+            if (IsWindow(m_arrow.m_dialog))
+            {
+                return TRUE;    // prevent
+            }
 
             auto entry = (EntryBase *)lParam;
 
@@ -10204,6 +11902,18 @@ LRESULT MMainWnd::OnNotify(HWND hwnd, int idFrom, NMHDR *pnmhdr)
                 }
             }
 
+            m_arrow.ShowDropDownList(m_arrow, FALSE);
+            ShowLangArrow(FALSE);
+
+            switch (entry->m_et)
+            {
+            case ET_LANG:
+            case ET_MESSAGE:
+            case ET_STRING:
+                PostMessage(hwnd, WM_COMMAND, ID_AUTOCOMPLETE, 0);
+                break;
+            }
+
             return FALSE;       // accept
         }
         else if (pnmhdr->code == TVN_ENDLABELEDIT)
@@ -10211,12 +11921,24 @@ LRESULT MMainWnd::OnNotify(HWND hwnd, int idFrom, NMHDR *pnmhdr)
             MWaitCursor wait;
             auto pInfo = (TV_DISPINFO *)pnmhdr;
             LPARAM lParam = pInfo->item.lParam;
-            HTREEITEM hItem = pInfo->item.hItem;
             LPWSTR pszNewText = pInfo->item.pszText;
-            if (pszNewText == NULL)
-                return FALSE;   // reject
 
             auto entry = (EntryBase *)lParam;
+
+            switch (entry->m_et)
+            {
+            case ET_LANG:
+            case ET_MESSAGE:
+            case ET_STRING:
+                PostMessage(hwnd, WM_COMMAND, ID_AUTOCOMPLETEDONE, 0);
+                break;
+            }
+
+            if (pszNewText == NULL)
+            {
+                PostUpdateLangArrow(hwnd);
+                return FALSE;   // reject
+            }
 
             if (!entry || entry->m_et == ET_TYPE)
             {
@@ -10259,17 +11981,20 @@ LRESULT MMainWnd::OnNotify(HWND hwnd, int idFrom, NMHDR *pnmhdr)
                     return FALSE;   // reject
 
                 // check if it already exists
-                if (auto e = g_res.find(ET_LANG, entry->m_type, new_name))
+                if (g_res.find(ET_LANG, entry->m_type, new_name))
                 {
                     ErrorBoxDx(IDS_ALREADYEXISTS);
                     return FALSE;   // reject
                 }
 
                 DoRenameEntry(pszNewText, entry, old_name, new_name);
+                DoSetFileModified(TRUE);
                 return TRUE;   // accept
             }
             else if (entry->m_et == ET_LANG)
             {
+                PostUpdateLangArrow(hwnd);
+
                 old_lang = LangFromText(szOldText);
                 if (old_lang == BAD_LANG)
                     return FALSE;   // reject
@@ -10285,17 +12010,21 @@ LRESULT MMainWnd::OnNotify(HWND hwnd, int idFrom, NMHDR *pnmhdr)
                     return FALSE;   // reject
 
                 // check if it already exists
-                if (auto e = g_res.find(ET_LANG, entry->m_type, entry->m_name, new_lang))
+                if (g_res.find(ET_LANG, entry->m_type, entry->m_name, new_lang))
                 {
                     ErrorBoxDx(IDS_ALREADYEXISTS);
                     return FALSE;   // reject
                 }
 
                 DoRelangEntry(pszNewText, entry, old_lang, new_lang);
+                DoSetFileModified(TRUE);
+
                 return TRUE;   // accept
             }
             else if (entry->m_et == ET_STRING || entry->m_et == ET_MESSAGE)
             {
+                PostUpdateLangArrow(hwnd);
+
                 old_lang = LangFromText(szOldText);
                 if (old_lang == BAD_LANG)
                     return FALSE;   // reject
@@ -10311,13 +12040,14 @@ LRESULT MMainWnd::OnNotify(HWND hwnd, int idFrom, NMHDR *pnmhdr)
                     return FALSE;   // reject
 
                 // check if it already exists
-                if (auto e = g_res.find(ET_LANG, entry->m_type, WORD(0), new_lang))
+                if (g_res.find(ET_LANG, entry->m_type, WORD(0), new_lang))
                 {
                     ErrorBoxDx(IDS_ALREADYEXISTS);
                     return FALSE;   // reject
                 }
 
                 DoRelangEntry(pszNewText, entry, old_lang, new_lang);
+                DoSetFileModified(TRUE);
                 return TRUE;   // accept
             }
 
@@ -10327,11 +12057,23 @@ LRESULT MMainWnd::OnNotify(HWND hwnd, int idFrom, NMHDR *pnmhdr)
     return 0;
 }
 
+static int CALLBACK
+TreeViewCompare(LPARAM lParam1, LPARAM lParam2, LPARAM lParamSort)
+{
+    auto entry1 = (const EntryBase *)lParam1;
+    auto entry2 = (const EntryBase *)lParam2;
+    if (*entry1 < *entry2)
+        return -1;
+    if (*entry1 == *entry2)
+        return 0;
+    return 1;
+}
+
 // change the name of the resource entries
 void MMainWnd::DoRenameEntry(LPWSTR pszText, EntryBase *entry, const MIdOrString& old_name, const MIdOrString& new_name)
 {
     // search the old named language entries
-    EntrySetBase found;
+    EntrySet found;
     g_res.search(found, ET_LANG, entry->m_type, old_name);
 
     // rename them
@@ -10344,15 +12086,23 @@ void MMainWnd::DoRenameEntry(LPWSTR pszText, EntryBase *entry, const MIdOrString
     // update the entry name
     entry->m_name = new_name;
     UpdateEntryName(entry, pszText);
+    DoRefreshIDList(m_hwnd);
 
     // select the entry to update the text
     SelectTV(entry, FALSE);
+
+    DoSetFileModified(TRUE);
+
+    // sort
+    HTREEITEM hParent = TreeView_GetParent(m_hwndTV, entry->m_hItem);
+    TV_SORTCB cb = { hParent, TreeViewCompare };
+    TreeView_SortChildrenCB(m_hwndTV, &cb, 0);
 }
 
 // change the language of the resource entries
 void MMainWnd::DoRelangEntry(LPWSTR pszText, EntryBase *entry, WORD old_lang, WORD new_lang)
 {
-    EntrySetBase found;
+    EntrySet found;
 
     switch (entry->m_et)
     {
@@ -10405,6 +12155,114 @@ void MMainWnd::DoRelangEntry(LPWSTR pszText, EntryBase *entry, WORD old_lang, WO
 
     // select the entry
     SelectTV(entry, FALSE);
+
+    DoSetFileModified(TRUE);
+
+    // sort
+    HTREEITEM hParent = TreeView_GetParent(m_hwndTV, entry->m_hItem);
+    TV_SORTCB cb = { hParent, TreeViewCompare };
+    TreeView_SortChildrenCB(m_hwndTV, &cb, 0);
+}
+
+void MMainWnd::OnNextPane(HWND hwnd, BOOL bNext)
+{
+    HWND hwndCodeEditor = m_hCodeEditor;
+    HWND hwndHexViewer = m_hHexViewer;
+    HWND hwndRad = IsWindow(m_rad_window) ? (HWND)m_rad_window : NULL;
+    HWND hwndIDList = IsWindow(m_id_list_dlg) ? (HWND)m_id_list_dlg : NULL;
+    HWND hwndFind = IsWindow(m_hFindReplaceDlg) ? (HWND)m_hFindReplaceDlg : NULL;
+
+    HWND hwndFocus = GetFocus();
+
+    if (hwndRad != NULL && GetParent(hwndFocus) == hwndRad)
+        hwndFocus = hwndRad;
+
+    if (hwndIDList != NULL && GetParent(hwndFocus) == hwndIDList)
+        hwndFocus = hwndIDList;
+
+    if (hwndFind != NULL && GetParent(hwndFocus) == hwndFind)
+        hwndFocus = hwndFind;
+
+    if (hwndFocus == NULL)
+    {
+        SetFocus(m_hwndTV);
+        return;
+    }
+
+    HWND ahwnd[] =
+    {
+        m_hwndTV, m_hCodeEditor, m_hHexViewer, hwndRad, m_hFindReplaceDlg, hwndIDList
+    };
+
+    UINT i;
+    for (i = 0; i < _countof(ahwnd); ++i)
+    {
+        if (ahwnd[i] == hwndFocus)
+            break;
+    }
+
+    if (i == _countof(ahwnd))
+    {
+        SetFocus(m_hwndTV);
+        return;
+    }
+
+    if (bNext)
+    {
+        do
+        {
+            ++i;
+            if (i == _countof(ahwnd))
+                i = 0;
+        } while (ahwnd[i] == NULL);
+    }
+    else
+    {
+        do
+        {
+            if (i == 0)
+                i = _countof(ahwnd) - 1;
+            else
+                --i;
+        } while (ahwnd[i] == NULL);
+    }
+
+    if (hwndCodeEditor == ahwnd[i])
+    {
+        OnSelChange(hwnd, 0);
+        SetFocus(m_hCodeEditor);
+    }
+    else if (hwndHexViewer == ahwnd[i])
+    {
+        OnSelChange(hwnd, 1);
+        SetFocus(m_hHexViewer);
+    }
+    else
+    {
+        SetFocus(ahwnd[i]);
+    }
+}
+
+void MMainWnd::OnHelp(HWND hwnd)
+{
+    ShellExecuteW(hwnd, NULL, LoadStringDx(IDS_HOMEPAGE), NULL, NULL, SW_SHOWNORMAL);
+}
+
+void MMainWnd::OnReplaceDialogFonts(HWND hwnd)
+{
+    // compile if necessary
+    if (!CompileIfNecessary(FALSE))
+        return;
+
+    // if RADical window is displayed
+    if (IsWindowVisible(m_rad_window))
+    {
+        // destroy it
+        DestroyWindow(m_rad_window);
+    }
+
+    MReplaceDialogFontsDlg dialog;
+    dialog.DialogBoxDx(hwnd);
 }
 
 // do resource test
@@ -10438,11 +12296,11 @@ void MMainWnd::OnTest(HWND hwnd)
             dialog_res.m_menu.clear();
             stream.clear();
 
-            // fixup for "MOleCtrl", "AtlAxWin*" and/or "{...}" window classes.
-            // see also: DialogRes::Fixup2
-            dialog_res.Fixup2(false);
+            // fixup for "AtlAxWin*" and/or "{...}" window classes.
+            // see also: DialogRes::FixupForTest
+            dialog_res.FixupForTest(false);
             dialog_res.SaveToStream(stream);
-            dialog_res.Fixup2(true);
+            dialog_res.FixupForTest(true);
 
             // load RT_DLGINIT if any
             std::vector<BYTE> dlginit_data;
@@ -10469,6 +12327,7 @@ void MMainWnd::OnTest(HWND hwnd)
                 // it's a non-child dialog. show the test dialog (with menu if any)
                 MTestDialog dialog(dialog_res, menu, entry->m_lang, dlginit_data);
                 dialog.DialogBoxIndirectDx(hwnd, stream.ptr());
+                stream = stream;
             }
         }
     }
@@ -10716,8 +12575,9 @@ void MMainWnd::AddApStudioBlock(std::vector<MStringA>& lines)
 // delete the '#ifdef APSTUDIO_INVOKED ... #endif' block
 void MMainWnd::DeleteApStudioBlock(std::vector<MStringA>& lines)
 {
-    bool inside = false, found = false;
-    size_t nest = 0, k = -1;
+    bool inside = false;
+    size_t nest = 0;
+    std::ptrdiff_t k = -1;
     for (size_t i = 0; i < lines.size(); ++i)
     {
         MStringA& line = lines[i];
@@ -10741,7 +12601,6 @@ void MMainWnd::DeleteApStudioBlock(std::vector<MStringA>& lines)
             if (name == "APSTUDIO_INVOKED")
             {
                 inside = true;
-                found = false;
                 k = i;
                 ++nest;
             }
@@ -10763,11 +12622,6 @@ void MMainWnd::DeleteApStudioBlock(std::vector<MStringA>& lines)
                 ++pch;
             }
             MStringA name(pch0, pch);
-
-            if (name == "_APS_NEXT_RESOURCE_VALUE")
-            {
-                found = true;
-            }
         }
         else if (memcmp(pch, "endif", 5) == 0)
         {
@@ -10826,7 +12680,6 @@ void MMainWnd::OnUpdateResHBang(HWND hwnd)
     //     return;
     // }
 
-    //if (m_szResourceH[0] == 0 || GetFileAttributes(m_szResourceH) == INVALID_FILE_ATTRIBUTES)
     if (1)
     {
         // build new "resource.h" file path
@@ -10855,10 +12708,7 @@ void MMainWnd::OnUpdateResHBang(HWND hwnd)
         }
 
         // initialize OPENFILENAME structure
-        OPENFILENAMEW ofn;
-        ZeroMemory(&ofn, sizeof(ofn));
-        ofn.lStructSize = OPENFILENAME_SIZE_VERSION_400W;
-        ofn.hwndOwner = hwnd;
+        OPENFILENAMEW ofn = { OPENFILENAME_SIZE_VERSION_400W, hwnd };
         ofn.lpstrFilter = MakeFilterDx(LoadStringDx(IDS_HEADFILTER));
         ofn.lpstrFile = szResH;
         ofn.nMaxFile = _countof(szResH);
@@ -10922,6 +12772,7 @@ void MMainWnd::OnUpdateResHBang(HWND hwnd)
             fprintf(fp, "%s\n", lines[i].c_str());
         }
 
+        fflush(fp);
         fclose(fp);     // close the files
     }
 
@@ -10931,6 +12782,8 @@ void MMainWnd::OnUpdateResHBang(HWND hwnd)
 
     // reopen the ID list window if necessary
     ShowIDList(hwnd, bListOpen);
+
+    DoSetFileModified(TRUE);
 }
 
 // add an icon resource
@@ -10949,6 +12802,8 @@ void MMainWnd::OnAddIcon(HWND hwnd)
 
         // select the entry
         SelectTV(ET_LANG, dialog, FALSE);
+
+        DoSetFileModified(TRUE);
     }
 }
 
@@ -10970,6 +12825,8 @@ void MMainWnd::OnReplaceIcon(HWND hwnd)
     {
         // select the entry
         SelectTV(ET_LANG, dialog, FALSE);
+
+        DoSetFileModified(TRUE);
     }
 }
 
@@ -10991,6 +12848,8 @@ void MMainWnd::OnReplaceCursor(HWND hwnd)
     {
         // select the entry
         SelectTV(ET_LANG, dialog, FALSE);
+
+        DoSetFileModified(TRUE);
     }
 }
 
@@ -11010,6 +12869,8 @@ void MMainWnd::OnAddBitmap(HWND hwnd)
 
         // select the entry
         SelectTV(ET_LANG, dialog, FALSE);
+
+        DoSetFileModified(TRUE);
     }
 }
 
@@ -11031,6 +12892,8 @@ void MMainWnd::OnReplaceBitmap(HWND hwnd)
     {
         // select the entry
         SelectTV(ET_LANG, dialog, FALSE);
+
+        DoSetFileModified(TRUE);
     }
 }
 
@@ -11050,6 +12913,8 @@ void MMainWnd::OnAddCursor(HWND hwnd)
 
         // select the entry
         SelectTV(ET_LANG, dialog, FALSE);
+
+        DoSetFileModified(TRUE);
     }
 }
 
@@ -11066,6 +12931,8 @@ void MMainWnd::OnAddRes(HWND hwnd)
     {
         // add a resource item
         DoAddRes(hwnd, dialog);
+
+        DoSetFileModified(TRUE);
     }
 }
 
@@ -11083,6 +12950,8 @@ void MMainWnd::OnAddMenu(HWND hwnd)
     {
         // add a resource item
         DoAddRes(hwnd, dialog);
+
+        DoSetFileModified(TRUE);
     }
 }
 
@@ -11100,6 +12969,8 @@ void MMainWnd::OnAddStringTable(HWND hwnd)
     {
         // add a resource item
         DoAddRes(hwnd, dialog);
+
+        DoSetFileModified(TRUE);
     }
 }
 
@@ -11117,6 +12988,8 @@ void MMainWnd::OnAddMessageTable(HWND hwnd)
     {
         // add a resource item
         DoAddRes(hwnd, dialog);
+
+        DoSetFileModified(TRUE);
     }
 }
 
@@ -11134,6 +13007,8 @@ void MMainWnd::OnAddHtml(HWND hwnd)
     {
         // add a resource item
         DoAddRes(hwnd, dialog);
+
+        DoSetFileModified(TRUE);
     }
 }
 
@@ -11151,6 +13026,8 @@ void MMainWnd::OnAddAccel(HWND hwnd)
     {
         // add a resource item
         DoAddRes(hwnd, dialog);
+
+        DoSetFileModified(TRUE);
     }
 }
 
@@ -11168,6 +13045,8 @@ void MMainWnd::OnAddVerInfo(HWND hwnd)
     {
         // add a resource item
         DoAddRes(hwnd, dialog);
+
+        DoSetFileModified(TRUE);
     }
 }
 
@@ -11185,6 +13064,8 @@ void MMainWnd::OnAddManifest(HWND hwnd)
     {
         // add a resource item
         DoAddRes(hwnd, dialog);
+
+        DoSetFileModified(TRUE);
     }
 }
 
@@ -11200,33 +13081,35 @@ void MMainWnd::DoAddRes(HWND hwnd, MAddResDlg& dialog)
         SelectTV(ET_LANG, dialog, FALSE);
 
         // clear the modification flag
-        Edit_SetModify(m_hSrcEdit, FALSE);
+        Edit_SetModify(m_hCodeEditor, FALSE);
     }
     else        // use dialog.m_strTemplate
     {
-        // dialog.m_strTemplate --> m_hSrcEdit
-        SetWindowTextW(m_hSrcEdit, dialog.m_strTemplate.c_str());
+        // dialog.m_strTemplate --> m_hCodeEditor
+        SetWindowTextW(m_hCodeEditor, dialog.m_strTemplate.c_str());
 
         // compile dialog.m_strTemplate
         MStringA strOutput;
         if (CompileParts(strOutput, dialog.m_type, dialog.m_name, dialog.m_lang, dialog.m_strTemplate, FALSE))
         {
             // success. clear the modification flag
-            Edit_SetModify(m_hSrcEdit, FALSE);
+            Edit_SetModify(m_hCodeEditor, FALSE);
+            m_nStatusStringID = IDS_RECOMPILEOK;
         }
         else
         {
             // failure
+            m_nStatusStringID = IDS_RECOMPILEFAILED;
             UpdateOurToolBarButtons(2);
 
             // set the error message
             SetErrorMessage(strOutput, TRUE);
 
             // set the modification flag
-            Edit_SetModify(m_hSrcEdit, TRUE);
+            Edit_SetModify(m_hCodeEditor, TRUE);
 
             // make it non-read-only
-            Edit_SetReadOnly(m_hSrcEdit, FALSE);
+            Edit_SetReadOnly(m_hCodeEditor, FALSE);
         }
 
         // select the added entry
@@ -11236,7 +13119,7 @@ void MMainWnd::DoAddRes(HWND hwnd, MAddResDlg& dialog)
             SelectTV(ET_MESSAGE, dialog.m_type, (WORD)0, BAD_LANG, FALSE);
         else
             SelectTV(ET_LANG, dialog, FALSE);
-    }
+   }
 }
 
 // add a dialog template
@@ -11253,6 +13136,26 @@ void MMainWnd::OnAddDialog(HWND hwnd)
     {
         // add a resource item
         DoAddRes(hwnd, dialog);
+
+        DoSetFileModified(TRUE);
+    }
+}
+
+void MMainWnd::UpdateTitleBar()
+{
+    if (m_szFile[0] == 0)
+    {
+        SetWindowTextW(m_hwnd, LoadStringDx(IDS_APPNAME));
+    }
+    else if (g_settings.bShowFullPath)
+    {
+        // set the full file path to the title bar
+        SetWindowTextW(m_hwnd, LoadStringPrintfDx(IDS_TITLEWITHFILE, m_szFile));
+    }
+    else
+    {
+        // set the file title to the title bar
+        SetWindowTextW(m_hwnd, LoadStringPrintfDx(IDS_TITLEWITHFILE, PathFindFileNameW(m_szFile)));
     }
 }
 
@@ -11264,29 +13167,19 @@ BOOL MMainWnd::UpdateFileInfo(FileType ft, LPCWSTR pszFile, BOOL bCompressed)
 
     if (pszFile == NULL || pszFile[0] == 0)
     {
-        // clear the file infp
+        // clear the file info
         m_szFile[0] = 0;
-        SetWindowTextW(m_hwnd, LoadStringDx(IDS_APPNAME));
+        UpdateTitleBar();
         return TRUE;
     }
 
-    WCHAR szPath[MAX_PATH], *pch;
+    if (m_szFile != pszFile)
+    {
+        // pszFile --> m_szFile (full path)
+        GetFullPathNameW(pszFile, _countof(m_szFile), m_szFile, NULL);
+    }
 
-    // pszFile --> szPath --> m_szFile (full path)
-    GetFullPathNameW(pszFile, _countof(szPath), szPath, &pch);
-    StringCchCopyW(m_szFile, _countof(m_szFile), szPath);
-
-    // find the last '\\' or '/'
-    pch = wcsrchr(szPath, L'\\');
-    if (pch == NULL)
-        pch = wcsrchr(szPath, L'/');
-    if (pch == NULL)
-        pch = szPath;
-    else
-        ++pch;
-
-    // set the file title to the title bar
-    SetWindowTextW(m_hwnd, LoadStringPrintfDx(IDS_TITLEWITHFILE, pch));
+    UpdateTitleBar();
 
     // add to the recently used files
     g_settings.AddFile(m_szFile);
@@ -11300,16 +13193,17 @@ BOOL MMainWnd::UpdateFileInfo(FileType ft, LPCWSTR pszFile, BOOL bCompressed)
 // set the default settings
 void MMainWnd::SetDefaultSettings(HWND hwnd)
 {
-    g_settings.bShowBinEdit = TRUE;
+    g_settings.bShowBinEdit = FALSE;
     g_settings.bAlwaysControl = FALSE;
     g_settings.bShowStatusBar = TRUE;
     g_settings.nTreeViewWidth = TV_WIDTH;
     g_settings.nBmpViewWidth = BV_WIDTH;
-    g_settings.nBinEditHeight = BE_HEIGHT;
     g_settings.bGuiByDblClick = TRUE;
     g_settings.bResumeWindowPos = TRUE;
     g_settings.bAutoLoadNearbyResH = TRUE;
     g_settings.bAutoShowIDList = TRUE;
+    g_settings.bHideID = FALSE;
+    g_settings.bUseIDC_STATIC = FALSE;
     g_settings.bShowDotsOnDialog = TRUE;
     g_settings.nComboHeight = 300;
     g_settings.vecRecentlyUsed.clear();
@@ -11326,6 +13220,15 @@ void MMainWnd::SetDefaultSettings(HWND hwnd)
     g_settings.nRadTop = CW_USEDEFAULT;
     g_settings.bAskUpdateResH = FALSE;
     g_settings.bCompressByUPX = FALSE;
+    g_settings.bUseBeginEnd = FALSE;
+    g_settings.bShowFullPath = TRUE;
+    g_settings.nDfmCodePage = 0;
+    g_settings.bDfmRawTextComments = TRUE;
+    g_settings.bDfmNoUnicode = FALSE;
+    g_settings.nEgaX = CW_USEDEFAULT;
+    g_settings.nEgaY = CW_USEDEFAULT;
+    g_settings.nEgaWidth = CW_USEDEFAULT;
+    g_settings.nEgaHeight = CW_USEDEFAULT;
 
     HFONT hFont;
     LOGFONTW lf, lfBin, lfSrc;
@@ -11419,8 +13322,8 @@ void MMainWnd::SetDefaultSettings(HWND hwnd)
     g_settings.strCppExe.clear();
 
     // cpp.exe
-    StringCchCopyW(m_szCppExe, _countof(m_szCppExe), m_szDataFolder);
-    StringCchCatW(m_szCppExe, _countof(m_szCppExe), L"\\bin\\cpp.exe");
+    StringCchCopyW(m_szMCppExe, _countof(m_szMCppExe), m_szDataFolder);
+    StringCchCatW(m_szMCppExe, _countof(m_szMCppExe), L"\\bin\\mcpp.exe");
 
     // windres.exe
     StringCchCopyW(m_szWindresExe, _countof(m_szWindresExe), m_szDataFolder);
@@ -11435,7 +13338,11 @@ void MMainWnd::SetDefaultSettings(HWND hwnd)
     g_settings.captions.clear();
 
     g_settings.bShowToolBar = TRUE;
-    g_settings.strAtlAxWin = L"AtlAxWin110";
+#ifdef ATL_SUPPORT
+    g_settings.strAtlAxWin = TEXT(ATLAXWIN_CLASS);
+#else
+    g_settings.strAtlAxWin = TEXT("AtlAxWin");
+#endif
     g_settings.nSaveFilterIndex = 1;
     g_settings.bWordWrap = FALSE;
 
@@ -11443,9 +13350,23 @@ void MMainWnd::SetDefaultSettings(HWND hwnd)
     g_settings.strBackupSuffix = L"-old";
 
     g_settings.bRedundantComments = TRUE;
-    g_settings.bWrapManifest = TRUE;
+    g_settings.bWrapManifest = FALSE;
+
+    g_settings.bRCFileUTF16 = FALSE;
 
     g_settings.ResetEncoding();
+
+    g_settings.strFontReplaceFrom1 = L"MS Shell Dlg";
+    g_settings.strFontReplaceTo1 = L"MS Shell Dlg";
+
+    g_settings.strFontReplaceFrom2 = L"MS Shell Dlg 2";
+    g_settings.strFontReplaceTo2 = L"MS Shell Dlg 2";
+
+    g_settings.strFontReplaceFrom3 = L"";
+    g_settings.strFontReplaceTo3 = L"";
+
+    // update the menu
+    UpdateMenu();
 }
 
 // update the prefix data
@@ -11472,6 +13393,9 @@ BOOL MMainWnd::LoadSettings(HWND hwnd)
 {
     SetDefaultSettings(hwnd);
 
+#ifdef PORTABLE
+    MRegKeyPortable keyRisoh(TEXT("RisohEditor"), NULL);
+#else
     // open the "HKEY_CURRENT_USER\Software" key
     MRegKey key(HKCU, TEXT("Software"));
     if (!key)
@@ -11486,15 +13410,15 @@ BOOL MMainWnd::LoadSettings(HWND hwnd)
     MRegKey keyRisoh(keySoftware, TEXT("RisohEditor"));
     if (!keyRisoh)
         return FALSE;
+#endif
 
     keyRisoh.QueryDword(TEXT("HIDE.ID"), (DWORD&)g_settings.bHideID);
-    keyRisoh.QueryDword(TEXT("bUseIDC_STATIC"), (DWORD&)g_settings.bHasIDC_STATIC);
+    keyRisoh.QueryDword(TEXT("bUseIDC_STATIC"), (DWORD&)g_settings.bUseIDC_STATIC);
     keyRisoh.QueryDword(TEXT("ShowStatusBar"), (DWORD&)g_settings.bShowStatusBar);
-    keyRisoh.QueryDword(TEXT("ShowBinEdit"), (DWORD&)g_settings.bShowBinEdit);
+    //keyRisoh.QueryDword(TEXT("ShowBinEdit"), (DWORD&)g_settings.bShowBinEdit);
     keyRisoh.QueryDword(TEXT("AlwaysControl"), (DWORD&)g_settings.bAlwaysControl);
     keyRisoh.QueryDword(TEXT("TreeViewWidth"), (DWORD&)g_settings.nTreeViewWidth);
     keyRisoh.QueryDword(TEXT("BmpViewWidth"), (DWORD&)g_settings.nBmpViewWidth);
-    keyRisoh.QueryDword(TEXT("BinEditHeight"), (DWORD&)g_settings.nBinEditHeight);
     keyRisoh.QueryDword(TEXT("bGuiByDblClick"), (DWORD&)g_settings.bGuiByDblClick);
     keyRisoh.QueryDword(TEXT("bResumeWindowPos"), (DWORD&)g_settings.bResumeWindowPos);
     keyRisoh.QueryDword(TEXT("bAutoLoadNearbyResH"), (DWORD&)g_settings.bAutoLoadNearbyResH);
@@ -11514,6 +13438,15 @@ BOOL MMainWnd::LoadSettings(HWND hwnd)
     keyRisoh.QueryDword(TEXT("nRadTop"), (DWORD&)g_settings.nRadTop);
     keyRisoh.QueryDword(TEXT("bAskUpdateResH"), (DWORD&)g_settings.bAskUpdateResH);
     keyRisoh.QueryDword(TEXT("bCompressByUPX"), (DWORD&)g_settings.bCompressByUPX);
+    keyRisoh.QueryDword(TEXT("bUseBeginEnd"), (DWORD&)g_settings.bUseBeginEnd);
+    keyRisoh.QueryDword(TEXT("bShowFullPath"), (DWORD&)g_settings.bShowFullPath);
+    keyRisoh.QueryDword(TEXT("nDfmCodePage"), (DWORD&)g_settings.nDfmCodePage);
+    keyRisoh.QueryDword(TEXT("bDfmRawTextComments"), (DWORD&)g_settings.bDfmRawTextComments);
+    keyRisoh.QueryDword(TEXT("bDfmNoUnicode"), (DWORD&)g_settings.bDfmNoUnicode);
+    keyRisoh.QueryDword(TEXT("nEgaX"), (DWORD&)g_settings.nEgaX);
+    keyRisoh.QueryDword(TEXT("nEgaY"), (DWORD&)g_settings.nEgaY);
+    keyRisoh.QueryDword(TEXT("nEgaWidth"), (DWORD&)g_settings.nEgaWidth);
+    keyRisoh.QueryDword(TEXT("nEgaHeight"), (DWORD&)g_settings.nEgaHeight);
 
     TCHAR szText[128];
     TCHAR szValueName[128];
@@ -11616,7 +13549,6 @@ BOOL MMainWnd::LoadSettings(HWND hwnd)
         g_settings.nRadLeft = CW_USEDEFAULT;
 
     DWORD i, dwCount;
-
     TCHAR szFormat[32], szFile[MAX_PATH];
 
     // load the recently used files
@@ -11628,7 +13560,7 @@ BOOL MMainWnd::LoadSettings(HWND hwnd)
         StringCchPrintf(szFormat, _countof(szFormat), TEXT("File%lu"), i);
         if (keyRisoh.QuerySz(szFormat, szFile, _countof(szFile)) == ERROR_SUCCESS)
         {
-            if (GetFileAttributes(szFile) != INVALID_FILE_ATTRIBUTES)
+            if (PathFileExistsW(szFile))
             {
                 g_settings.vecRecentlyUsed.push_back(szFile);
             }
@@ -11637,13 +13569,13 @@ BOOL MMainWnd::LoadSettings(HWND hwnd)
 
     if (keyRisoh.QuerySz(TEXT("strWindResExe"), szText, _countof(szText)) == ERROR_SUCCESS)
     {
-        if (GetFileAttributesW(szText) != INVALID_FILE_ATTRIBUTES)
+        if (PathFileExistsW(szText))
             g_settings.strWindResExe = szText;
     }
 
     if (keyRisoh.QuerySz(TEXT("strCppExe"), szText, _countof(szText)) == ERROR_SUCCESS)
     {
-        if (GetFileAttributesW(szText) != INVALID_FILE_ATTRIBUTES)
+        if (PathFileExistsW(szText))
             g_settings.strCppExe = szText;
     }
 
@@ -11667,7 +13599,7 @@ BOOL MMainWnd::LoadSettings(HWND hwnd)
     }
 
     keyRisoh.QueryDword(TEXT("bSepFilesByLang"), (DWORD&)g_settings.bSepFilesByLang);
-    keyRisoh.QueryDword(TEXT("bStoreToResFolder"), (DWORD&)g_settings.bStoreToResFolder);
+    g_settings.bStoreToResFolder = TRUE;
     keyRisoh.QueryDword(TEXT("bSelectableByMacro"), (DWORD&)g_settings.bSelectableByMacro);
 
     // load the captions
@@ -11694,6 +13626,7 @@ BOOL MMainWnd::LoadSettings(HWND hwnd)
 
     keyRisoh.QueryDword(TEXT("nSaveFilterIndex"), (DWORD&)g_settings.nSaveFilterIndex);
     keyRisoh.QueryDword(TEXT("bWordWrap"), (DWORD&)g_settings.bWordWrap);
+    keyRisoh.QueryDword(TEXT("RCFileUTF16"), (DWORD&)g_settings.bRCFileUTF16);
 
     keyRisoh.QueryDword(TEXT("bBackup"), (DWORD&)g_settings.bBackup);
 
@@ -11733,12 +13666,50 @@ BOOL MMainWnd::LoadSettings(HWND hwnd)
         }
     }
 
+    std::wstring strFrom;
+
+    if (keyRisoh.QuerySz(TEXT("FontReplaceFrom1"), szText, _countof(szText)) == ERROR_SUCCESS)
+    {
+        strFrom = szText;
+        if (keyRisoh.QuerySz(TEXT("FontReplaceTo1"), szText, _countof(szText)) == ERROR_SUCCESS)
+        {
+            g_settings.strFontReplaceFrom1 = strFrom;
+            g_settings.strFontReplaceTo1 = szText;
+        }
+    }
+
+    if (keyRisoh.QuerySz(TEXT("FontReplaceFrom2"), szText, _countof(szText)) == ERROR_SUCCESS)
+    {
+        strFrom = szText;
+        if (keyRisoh.QuerySz(TEXT("FontReplaceTo2"), szText, _countof(szText)) == ERROR_SUCCESS)
+        {
+            g_settings.strFontReplaceFrom2 = strFrom;
+            g_settings.strFontReplaceTo2 = szText;
+        }
+    }
+
+    if (keyRisoh.QuerySz(TEXT("FontReplaceFrom3"), szText, _countof(szText)) == ERROR_SUCCESS)
+    {
+        strFrom = szText;
+        if (keyRisoh.QuerySz(TEXT("FontReplaceTo3"), szText, _countof(szText)) == ERROR_SUCCESS)
+        {
+            g_settings.strFontReplaceFrom3 = strFrom;
+            g_settings.strFontReplaceTo3 = szText;
+        }
+    }
+
+    // update the menu
+    UpdateMenu();
+
     return TRUE;
 }
 
 // save the settings
 BOOL MMainWnd::SaveSettings(HWND hwnd)
 {
+#ifdef PORTABLE
+    MRegKeyPortable keyRisoh(TEXT("RisohEditor"), NULL);
+#else
     // open HKEY_CURRENT_USER\Software
     MRegKey key(HKCU, TEXT("Software"), TRUE);
     if (!key)
@@ -11753,23 +13724,21 @@ BOOL MMainWnd::SaveSettings(HWND hwnd)
     MRegKey keyRisoh(keySoftware, TEXT("RisohEditor"), TRUE);
     if (!keyRisoh)
         return FALSE;
+#endif
 
     // update pane extent settings
-    if (m_splitter3.GetPaneCount() >= 2)
-        g_settings.nBmpViewWidth = m_splitter3.GetPaneExtent(1);
     if (m_splitter2.GetPaneCount() >= 2)
-        g_settings.nBinEditHeight = m_splitter2.GetPaneExtent(1);
-    if (m_splitter1.GetPaneCount() >= 1)
+        g_settings.nBmpViewWidth = m_splitter2.GetPaneExtent(1);
+    if (m_splitter1.GetPaneCount() >= 2)
         g_settings.nTreeViewWidth = m_splitter1.GetPaneExtent(0);
 
     keyRisoh.SetDword(TEXT("HIDE.ID"), g_settings.bHideID);
     keyRisoh.SetDword(TEXT("bUseIDC_STATIC"), g_settings.bUseIDC_STATIC);
     keyRisoh.SetDword(TEXT("ShowStatusBar"), g_settings.bShowStatusBar);
-    keyRisoh.SetDword(TEXT("ShowBinEdit"), g_settings.bShowBinEdit);
+    //keyRisoh.SetDword(TEXT("ShowBinEdit"), g_settings.bShowBinEdit);
     keyRisoh.SetDword(TEXT("AlwaysControl"), g_settings.bAlwaysControl);
     keyRisoh.SetDword(TEXT("TreeViewWidth"), g_settings.nTreeViewWidth);
     keyRisoh.SetDword(TEXT("BmpViewWidth"), g_settings.nBmpViewWidth);
-    keyRisoh.SetDword(TEXT("BinEditHeight"), g_settings.nBinEditHeight);
     keyRisoh.SetDword(TEXT("bGuiByDblClick"), g_settings.bGuiByDblClick);
     keyRisoh.SetDword(TEXT("bResumeWindowPos"), g_settings.bResumeWindowPos);
     keyRisoh.SetDword(TEXT("bAutoLoadNearbyResH"), g_settings.bAutoLoadNearbyResH);
@@ -11789,6 +13758,15 @@ BOOL MMainWnd::SaveSettings(HWND hwnd)
     keyRisoh.SetDword(TEXT("nRadTop"), g_settings.nRadTop);
     keyRisoh.SetDword(TEXT("bAskUpdateResH"), g_settings.bAskUpdateResH);
     keyRisoh.SetDword(TEXT("bCompressByUPX"), g_settings.bCompressByUPX);
+    keyRisoh.SetDword(TEXT("bUseBeginEnd"), g_settings.bUseBeginEnd);
+    keyRisoh.SetDword(TEXT("bShowFullPath"), g_settings.bShowFullPath);
+    keyRisoh.SetDword(TEXT("nDfmCodePage"), g_settings.nDfmCodePage);
+    keyRisoh.SetDword(TEXT("bDfmRawTextComments"), g_settings.bDfmRawTextComments);
+    keyRisoh.SetDword(TEXT("bDfmNoUnicode"), g_settings.bDfmNoUnicode);
+    keyRisoh.SetDword(TEXT("nEgaX"), g_settings.nEgaX);
+    keyRisoh.SetDword(TEXT("nEgaY"), g_settings.nEgaY);
+    keyRisoh.SetDword(TEXT("nEgaWidth"), g_settings.nEgaWidth);
+    keyRisoh.SetDword(TEXT("nEgaHeight"), g_settings.nEgaHeight);
     keyRisoh.SetSz(TEXT("strSrcFont"), g_settings.strSrcFont.c_str());
     keyRisoh.SetDword(TEXT("nSrcFontSize"), g_settings.nSrcFontSize);
     keyRisoh.SetSz(TEXT("strBinFont"), g_settings.strBinFont.c_str());
@@ -11846,10 +13824,10 @@ BOOL MMainWnd::SaveSettings(HWND hwnd)
     // always use old style
     keyRisoh.SetDword(TEXT("bOldStyle"), TRUE);
 
-    keyRisoh.SetSz(TEXT("strPrevVersion"), TEXT(RE_VERSION));
+    keyRisoh.SetSz(TEXT("strPrevVersion"), GetRisohEditorVersion().c_str());
 
     keyRisoh.SetDword(TEXT("bSepFilesByLang"), g_settings.bSepFilesByLang);
-    keyRisoh.SetDword(TEXT("bStoreToResFolder"), g_settings.bStoreToResFolder);
+    keyRisoh.SetDword(TEXT("bStoreToResFolder"), TRUE);
     keyRisoh.SetDword(TEXT("bSelectableByMacro"), g_settings.bSelectableByMacro);
 
     // save the captions
@@ -11867,9 +13845,11 @@ BOOL MMainWnd::SaveSettings(HWND hwnd)
     keyRisoh.SetSz(L"strAtlAxWin", g_settings.strAtlAxWin.c_str());
     keyRisoh.SetDword(TEXT("nSaveFilterIndex"), g_settings.nSaveFilterIndex);
     keyRisoh.SetDword(TEXT("bWordWrap"), g_settings.bWordWrap);
+    keyRisoh.SetDword(TEXT("RCFileUTF16"), g_settings.bRCFileUTF16);
+
     keyRisoh.SetDword(TEXT("bBackup"), g_settings.bBackup);
 
-    keyRisoh.SetSz(TEXT("strBackupSuffix"), TEXT(RE_VERSION));
+    keyRisoh.SetSz(TEXT("strBackupSuffix"), GetRisohEditorVersion().c_str());
     keyRisoh.SetSz(L"strBackupSuffix", g_settings.strBackupSuffix.c_str());
 
     keyRisoh.SetDword(TEXT("bRedundantComments"), g_settings.bRedundantComments);
@@ -11893,15 +13873,24 @@ BOOL MMainWnd::SaveSettings(HWND hwnd)
         }
     }
 
+    keyRisoh.SetSz(TEXT("FontReplaceFrom1"), g_settings.strFontReplaceFrom1.c_str());
+    keyRisoh.SetSz(TEXT("FontReplaceTo1"), g_settings.strFontReplaceTo1.c_str());
+
+    keyRisoh.SetSz(TEXT("FontReplaceFrom2"), g_settings.strFontReplaceFrom2.c_str());
+    keyRisoh.SetSz(TEXT("FontReplaceTo2"), g_settings.strFontReplaceTo2.c_str());
+
+    keyRisoh.SetSz(TEXT("FontReplaceFrom3"), g_settings.strFontReplaceFrom3.c_str());
+    keyRisoh.SetSz(TEXT("FontReplaceTo3"), g_settings.strFontReplaceTo3.c_str());
+
     return TRUE;
 }
 
 BOOL MMainWnd::ReCreateSrcEdit(HWND hwnd)
 {
-    BOOL bModify = Edit_GetModify(m_hSrcEdit);
+    BOOL bModify = Edit_GetModify(m_hCodeEditor);
 
-    if (IsWindow(m_hSrcEdit))
-        DestroyWindow(m_hSrcEdit);
+    if (IsWindow(m_hCodeEditor))
+        DestroyWindow(m_hCodeEditor);
 
     DWORD style = WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_TABSTOP |
                   ES_AUTOVSCROLL | ES_LEFT | ES_MULTILINE |
@@ -11914,15 +13903,77 @@ BOOL MMainWnd::ReCreateSrcEdit(HWND hwnd)
     DWORD exstyle = WS_EX_CLIENTEDGE;
 
     HWND hSrcEdit = ::CreateWindowEx(exstyle, L"EDIT", NULL, style,
-        0, 0, 1, 1, m_splitter3, (HMENU)(INT_PTR)2, GetModuleHandle(NULL), NULL);
+        0, 0, 1, 1, m_splitter2, (HMENU)(INT_PTR)2, GetModuleHandle(NULL), NULL);
     if (hSrcEdit)
     {
-        m_hSrcEdit.SubclassDx(hSrcEdit);
+        m_hCodeEditor.SubclassDx(hSrcEdit);
 
-        Edit_SetModify(m_hSrcEdit, bModify);
+        m_hCodeEditor.SendMessageDx(EM_SETLIMITTEXT, 0x100000);
+
+        Edit_SetModify(m_hCodeEditor, bModify);
         return TRUE;
     }
     return FALSE;
+}
+
+static WNDPROC s_fnTreeViewOldWndProc = NULL;
+
+LRESULT CALLBACK
+TreeViewWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
+{
+    if (uMsg == WM_HSCROLL)
+    {
+        MMainWnd *this_ = (MMainWnd *)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+        if (IsWindow(this_->m_arrow))
+        {
+            // hide language arrow
+            this_->ShowLangArrow(FALSE);
+
+            // get selected item rect
+            RECT rc;
+            HTREEITEM hItem = TreeView_GetSelection(hwnd);
+            TreeView_GetItemRect(hwnd, hItem, &rc, FALSE);
+
+            // default processing
+            CallWindowProc(s_fnTreeViewOldWndProc, hwnd, uMsg, wParam, lParam);
+
+            // redraw the rect
+            InvalidateRect(hwnd, &rc, TRUE);
+
+            // restore language arrow
+            this_->PostUpdateLangArrow(*this_);
+            return 0;
+        }
+    }
+    if (uMsg == WM_SIZE || uMsg == WM_VSCROLL)
+    {
+        MMainWnd *this_ = (MMainWnd *)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+        if (IsWindow(this_->m_arrow))
+        {
+            // hide language arrow
+            this_->ShowLangArrow(FALSE);
+
+            // default processing
+            CallWindowProc(s_fnTreeViewOldWndProc, hwnd, uMsg, wParam, lParam);
+
+            // restore language arrow
+            this_->PostUpdateLangArrow(*this_);
+            return 0;
+        }
+    }
+    if (uMsg == WM_SYSKEYDOWN)
+    {
+        if (wParam == VK_DOWN)
+        {
+            MMainWnd *this_ = (MMainWnd *)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+            if (IsWindow(this_->m_arrow))
+            {
+                this_->m_arrow.ShowDropDownList(this_->m_arrow, TRUE);
+                return 0;
+            }
+        }
+    }
+    return CallWindowProc(s_fnTreeViewOldWndProc, hwnd, uMsg, wParam, lParam);
 }
 
 // WM_CREATE: the main window is to be created
@@ -11931,6 +13982,9 @@ BOOL MMainWnd::OnCreate(HWND hwnd, LPCREATESTRUCT lpCreateStruct)
     MWaitCursor wait;
 
     m_id_list_dlg.m_hMainWnd = hwnd;    // set the main window to the ID list window
+
+    s_hMainWnd = hwnd;
+    m_nShowMode = SHOW_CODEONLY;
 
     DoLoadLangInfo();   // load the language information
 
@@ -11992,11 +14046,19 @@ BOOL MMainWnd::OnCreate(HWND hwnd, LPCREATESTRUCT lpCreateStruct)
     style = WS_CHILD | WS_VISIBLE | SWS_HORZ | SWS_LEFTALIGN;
     if (!m_splitter1.CreateDx(hwnd, 2, style))
         return FALSE;
-    style = WS_CHILD | WS_VISIBLE | SWS_VERT | SWS_BOTTOMALIGN;
-    if (!m_splitter2.CreateDx(m_splitter1, 2, style))
+
+    style = WS_CHILD | WS_VISIBLE | WS_BORDER | TCS_BOTTOM | TCS_TABS | TCS_TOOLTIPS |
+            TCS_FOCUSNEVER | TCS_HOTTRACK | TCS_MULTILINE;
+    if (!m_tab.CreateWindowDx(m_splitter1, NULL, style))
         return FALSE;
+    SetWindowFont(m_tab, GetStockFont(DEFAULT_GUI_FONT), TRUE);
+
+    m_tab.InsertItem(0, LoadStringDx(IDS_CODEEDITOR));
+    m_tab.InsertItem(1, LoadStringDx(IDS_HEXVIEWER));
+    m_tab.SetCurSel(0);
+
     style = WS_CHILD | WS_VISIBLE | SWS_HORZ | SWS_RIGHTALIGN;
-    if (!m_splitter3.CreateDx(m_splitter2, 1, style))
+    if (!m_splitter2.CreateDx(m_splitter1, 1, style))
         return FALSE;
 
     // create a treeview (tree control) window
@@ -12008,6 +14070,9 @@ BOOL MMainWnd::OnCreate(HWND hwnd, LPCREATESTRUCT lpCreateStruct)
         (HMENU)1, m_hInst, NULL);
     if (m_hwndTV == NULL)
         return FALSE;
+
+    SetWindowLongPtr(m_hwndTV, GWLP_USERDATA, (LONG_PTR)this);
+    s_fnTreeViewOldWndProc = (WNDPROC)SetWindowLongPtrW(m_hwndTV, GWLP_WNDPROC, (LONG_PTR)TreeViewWndProc);
 
     // store the treeview handl to g_res (important!)
     g_res.m_hwndTV = m_hwndTV;
@@ -12026,14 +14091,15 @@ BOOL MMainWnd::OnCreate(HWND hwnd, LPCREATESTRUCT lpCreateStruct)
         ES_AUTOVSCROLL | ES_LEFT | ES_MULTILINE |
         ES_NOHIDESEL | ES_READONLY | ES_WANTRETURN;
     exstyle = WS_EX_CLIENTEDGE;
-    m_hBinEdit.CreateAsChildDx(m_splitter2, NULL, style, exstyle, 3);
+    m_hHexViewer.CreateAsChildDx(m_splitter2, NULL, style, exstyle, 3);
+    m_hHexViewer.SendMessageDx(EM_SETLIMITTEXT, 0x100000);
 
     // create source EDIT control
-    if (!ReCreateSrcEdit(hwnd))
+    if (!ReCreateSrcEdit(m_splitter2))
         return FALSE;
 
     // create MBmpView
-    if (!m_hBmpView.CreateDx(m_splitter3, 4))
+    if (!m_hBmpView.CreateDx(m_splitter2, 4))
         return FALSE;
 
     // create status bar
@@ -12057,13 +14123,9 @@ BOOL MMainWnd::OnCreate(HWND hwnd, LPCREATESTRUCT lpCreateStruct)
 
     // set the pane contents of splitters
     m_splitter1.SetPane(0, m_hwndTV);
-    m_splitter1.SetPane(1, m_splitter2);
+    m_splitter1.SetPane(1, m_tab);
     m_splitter1.SetPaneExtent(0, g_settings.nTreeViewWidth);
-    m_splitter2.SetPane(0, m_splitter3);
-    m_splitter2.SetPane(1, m_hBinEdit);
-    m_splitter2.SetPaneExtent(1, BE_HEIGHT);
-    m_splitter3.SetPane(0, m_hSrcEdit);
-    //m_splitter3.SetPane(1, m_hBmpView);
+    m_splitter2.SetPane(0, m_hCodeEditor);
 
     // create the fonts
     ReCreateFonts(hwnd);
@@ -12090,7 +14152,7 @@ BOOL MMainWnd::OnCreate(HWND hwnd, LPCREATESTRUCT lpCreateStruct)
     }
     if (g_settings.strCppExe.size())
     {
-        StringCchCopy(m_szCppExe, _countof(m_szCppExe), g_settings.strCppExe.c_str());
+        StringCchCopy(m_szMCppExe, _countof(m_szMCppExe), g_settings.strCppExe.c_str());
     }
 
     // OK, ready
@@ -12103,11 +14165,11 @@ BOOL MMainWnd::OnCreate(HWND hwnd, LPCREATESTRUCT lpCreateStruct)
 /*virtual*/ LRESULT CALLBACK
 MMainWnd::WindowProcDx(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
-    static UINT s_uFindMsg = RegisterWindowMessage(FINDMSGSTRING);
     switch (uMsg)
     {
         DO_MSG(WM_CREATE, OnCreate);
         DO_MSG(WM_COMMAND, OnCommand);
+        DO_MSG(WM_CLOSE, OnClose);
         DO_MSG(WM_DESTROY, OnDestroy);
         DO_MSG(WM_DROPFILES, OnDropFiles);
         DO_MSG(WM_MOVE, OnMove);
@@ -12117,20 +14179,23 @@ MMainWnd::WindowProcDx(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         DO_MSG(WM_INITMENU, OnInitMenu);
         DO_MSG(WM_ACTIVATE, OnActivate);
         DO_MSG(WM_SYSCOLORCHANGE, OnSysColorChange);
+        DO_MSG(WM_SETFOCUS, OnSetFocus);
+        DO_MSG(WM_KILLFOCUS, OnKillFocus);
         DO_MESSAGE(MYWM_CLEARSTATUS, OnClearStatus);
         DO_MESSAGE(MYWM_MOVESIZEREPORT, OnMoveSizeReport);
         DO_MESSAGE(MYWM_COMPILECHECK, OnCompileCheck);
         DO_MESSAGE(MYWM_REOPENRAD, OnReopenRad);
-        DO_MESSAGE(MYWM_POSTSEARCH, OnPostSearch);
         DO_MESSAGE(MYWM_IDJUMPBANG, OnIDJumpBang);
         DO_MESSAGE(MYWM_SELCHANGE, OnRadSelChange);
         DO_MESSAGE(MYWM_UPDATEDLGRES, OnUpdateDlgRes);
+        DO_MESSAGE(MYWM_GETDLGHEADLINES, OnGetHeadLines);
+        DO_MESSAGE(MYWM_DELPHI_DFM_B2T, OnDelphiDFMB2T);
+        DO_MESSAGE(MYWM_TLB_B2T, OnTLB2IDL);
+        DO_MESSAGE(MYWM_ITEMSEARCH, OnItemSearchBang);
+        DO_MESSAGE(MYWM_COMPLEMENT, OnComplement);
+        DO_MESSAGE(MYWM_UPDATELANGARROW, OnUpdateLangArrow);
 
     default:
-        if (uMsg == s_uFindMsg)
-        {
-            return OnFindMsg(hwnd, wParam, lParam);
-        }
         return DefaultProcDx();
     }
 }
@@ -12242,8 +14307,54 @@ void MMainWnd::OnIDJumpBang2(HWND hwnd, const MString& name, MString& strType)
     }
 }
 
+LRESULT MMainWnd::OnTLB2IDL(HWND hwnd, WPARAM wParam, LPARAM lParam)
+{
+    auto& str = *(MString *)wParam;
+    auto& entry = *(const EntryBase *)lParam;
+
+    std::string ansi;
+    if (GetMachineOfBinary(m_szFile) == IMAGE_FILE_MACHINE_AMD64)
+        ansi = tlb_text_from_binary(m_szTLB2IDL64, entry.ptr(), entry.size());
+    else
+        ansi = tlb_text_from_binary(m_szTLB2IDL32, entry.ptr(), entry.size());
+    MAnsiToWide a2w(CP_UTF8, ansi.c_str());
+    str = a2w.c_str();
+    return 0;
+}
+
+LRESULT MMainWnd::OnDelphiDFMB2T(HWND hwnd, WPARAM wParam, LPARAM lParam)
+{
+    auto& str = *(MString *)wParam;
+    auto& entry = *(const EntryBase *)lParam;
+
+    auto ansi = dfm_text_from_binary(m_szDFMSC, entry.ptr(), entry.size(),
+                                     g_settings.nDfmCodePage, g_settings.bDfmRawTextComments);
+    MAnsiToWide a2w(CP_UTF8, ansi.c_str());
+    str = a2w.c_str();
+    return 0;
+}
+
+LRESULT MMainWnd::OnGetHeadLines(HWND hwnd, WPARAM wParam, LPARAM lParam)
+{
+    // get the selected entry
+    auto entry = g_res.get_lang_entry();
+    if (!entry)
+        return -1;
+
+    if (entry->m_type == RT_DIALOG)
+    {
+        DialogRes dialog_res;
+        MByteStreamEx stream(entry->m_data);
+        dialog_res.LoadFromStream(stream);
+        return dialog_res.GetHeadLines();;
+    }
+    return -1;
+}
+
 LRESULT MMainWnd::OnUpdateDlgRes(HWND hwnd, WPARAM wParam, LPARAM lParam)
 {
+    DoSetFileModified(TRUE);
+
     // get the selected language entry
     auto entry = g_res.get_lang_entry();
     if (!entry || entry->m_type != RT_DIALOG)
@@ -12258,14 +14369,14 @@ LRESULT MMainWnd::OnUpdateDlgRes(HWND hwnd, WPARAM wParam, LPARAM lParam)
     dialog_res.SaveToStream(stream);
     entry->m_data = stream.data();
 
-    // entry->m_lang + dialog_res --> str --> m_hSrcEdit (text)
+    // entry->m_lang + dialog_res --> str --> m_hCodeEditor (text)
     MString str = GetLanguageStatement(entry->m_lang);
     str += dialog_res.Dump(entry->m_name);
-    SetWindowTextW(m_hSrcEdit, str.c_str());
+    SetWindowTextW(m_hCodeEditor, str.c_str());
 
-    // entry->m_data --> m_hBinEdit (binary)
+    // entry->m_data --> m_hHexViewer (binary)
     str = DumpBinaryAsText(entry->m_data);
-    SetWindowTextW(m_hBinEdit, str.c_str());
+    SetWindowTextW(m_hHexViewer, str.c_str());
 
     return 0;
 }
@@ -12274,12 +14385,12 @@ LRESULT MMainWnd::OnRadSelChange(HWND hwnd, WPARAM wParam, LPARAM lParam)
 {
     if (!IsWindow(m_rad_window))
     {
-        m_hSrcEdit.ClearIndeces();
+        m_hCodeEditor.ClearIndeces();
         return 0;
     }
 
     auto indeces = MRadCtrl::GetTargetIndeces();
-    m_hSrcEdit.SetIndeces(indeces);
+    m_hCodeEditor.SetIndeces(indeces);
     return 0;
 }
 
@@ -12308,29 +14419,6 @@ LRESULT MMainWnd::OnIDJumpBang(HWND hwnd, WPARAM wParam, LPARAM lParam)
 
     // do ID jump
     OnIDJumpBang2(hwnd, name, vecTypes[lParam]);
-
-    return 0;
-}
-
-// do something after find
-LRESULT MMainWnd::OnPostSearch(HWND hwnd, WPARAM wParam, LPARAM lParam)
-{
-    // reset the direction
-    m_fr.Flags = FR_DOWN;
-
-    if (m_search.bInternalText)
-    {
-        // m_search.strText --> m_szFindWhat
-        StringCchCopy(m_szFindWhat, _countof(m_szFindWhat), m_search.strText.c_str());
-
-        if (!m_search.bIgnoreCases)
-        {
-            m_fr.Flags |= FR_MATCHCASE;
-        }
-
-        // do search the text from source
-        OnFindNext(hwnd);
-    }
 
     return 0;
 }
@@ -12386,18 +14474,45 @@ void MMainWnd::DoEvents()
 // do the window messages
 void MMainWnd::DoMsg(MSG& msg)
 {
-    //// EDIT control Ctrl+A
-    //if (MEditCtrl::DoMsgCtrlA(&msg))
-    //    return;
+    // EDIT control Ctrl+A
+    if (MEditCtrl::DoMsgCtrlA(&msg))
+        return;
+
+    // do access keys
+    if (IsWindow(m_hwnd))
+    {
+        if (::TranslateAccelerator(m_hwnd, m_hAccel, &msg))
+            return;
+    }
+
+    if (IsWindow(m_arrow.m_dialog))
+    {
+        if (msg.message == WM_KEYDOWN)
+        {
+            if (m_arrow.DoComplement(m_arrow, msg.wParam))
+                return;
+        }
+        if (::IsDialogMessage(m_arrow.m_dialog, &msg))
+            return;
+    }
 
     // do the popup windows
+    if (IsWindow(m_rad_window))
+    {
+        if (::TranslateAccelerator(m_rad_window, m_hAccel, &msg))
+            return;
+    }
     if (IsWindow(m_rad_window.m_rad_dialog))
     {
+        if (::TranslateAccelerator(m_rad_window.m_rad_dialog, m_hAccel, &msg))
+            return;
         if (::IsDialogMessage(m_rad_window.m_rad_dialog, &msg))
             return;
     }
     if (IsWindow(m_id_list_dlg))
     {
+        if (::TranslateAccelerator(m_id_list_dlg, m_hAccel, &msg))
+            return;
         if (::IsDialogMessage(m_id_list_dlg, &msg))
             return;
     }
@@ -12406,13 +14521,6 @@ void MMainWnd::DoMsg(MSG& msg)
     if (IsWindow(m_hFindReplaceDlg))
     {
         if (::IsDialogMessage(m_hFindReplaceDlg, &msg))
-            return;
-    }
-
-    // do access keys
-    if (m_hAccel && IsWindow(m_hwnd))
-    {
-        if (::TranslateAccelerator(m_hwnd, m_hAccel, &msg))
             return;
     }
 
@@ -13537,16 +15645,488 @@ MStringW GetRisohTemplate(const MIdOrString& type, WORD wLang)
 
 ////////////////////////////////////////////////////////////////////////////
 
-// the manifest information
-#pragma comment(linker, "/manifestdependency:\"type='win32' \
-  name='Microsoft.Windows.Common-Controls' \
-  version='6.0.0.0' \
-  processorArchitecture='*' \
-  publicKeyToken='6595b64144ccf1df' \
-  language='*'\"")
+static MMainWnd *s_pMainWnd = NULL;
 
-// We will dynamically create the MOleCtrl instances
-IMPLEMENT_DYNAMIC(MOleCtrl)
+EGA::arg_t EGA_FN EGA_RES_search(const EGA::args_t& args)
+{
+    return s_pMainWnd->DoEgaResSearch(args);
+}
+
+EGA::arg_t EGA_FN EGA_RES_delete(const EGA::args_t& args)
+{
+    return s_pMainWnd->DoEgaResDelete(args);
+}
+
+EGA::arg_t EGA_FN EGA_RES_clone_by_name(const EGA::args_t& args)
+{
+    return s_pMainWnd->DoEgaResCloneByName(args);
+}
+
+EGA::arg_t EGA_FN EGA_RES_clone_by_lang(const EGA::args_t& args)
+{
+    return s_pMainWnd->DoEgaResCloneByLang(args);
+}
+
+EGA::arg_t EGA_FN EGA_RES_unload_resh(const EGA::args_t& args)
+{
+    return s_pMainWnd->DoEgaResUnloadResH(args);
+}
+
+EGA::arg_t EGA_FN EGA_RES_select(const EGA::args_t& args)
+{
+    return s_pMainWnd->DoEgaResSelect(args);
+}
+
+EGA::arg_t EGA_FN EGA_RES_get_binary(const EGA::args_t& args)
+{
+    return s_pMainWnd->DoEgaResGetBinary(args);
+}
+
+EGA::arg_t EGA_FN EGA_RES_set_binary(const EGA::args_t& args)
+{
+    return s_pMainWnd->DoEgaResSetBinary(args);
+}
+
+EGA::arg_t EGA_FN EGA_RES_const(const EGA::args_t& args)
+{
+    return s_pMainWnd->DoEgaResConst(args);
+}
+
+MIdOrString EGA_get_id_or_str(const arg_t& arg0)
+{
+    MIdOrString ret;
+
+    if (arg0->get_type() == AST_INT)
+    {
+        ret = (WORD)EGA_get_int(arg0);
+    }
+    else
+    {
+        std::string str = EGA_get_str(arg0);
+        MAnsiToWide wide(CP_UTF8, str.c_str());
+        ret = wide.c_str();
+    }
+
+    return ret;
+}
+
+EGA::arg_t EGA_set_id_or_str(const MIdOrString& id)
+{
+    if (id.is_str())
+    {
+        MWideToAnsi ansi(CP_UTF8, id.m_str.c_str());
+        return EGA::make_arg<AstStr>(ansi.c_str());
+    }
+    else
+    {
+        return EGA::make_arg<AstInt>(id.m_id);
+    }
+}
+
+EGA::arg_t MMainWnd::DoEgaResSearch(const EGA::args_t& args)
+{
+    using namespace EGA;
+    arg_t arg0, arg1, arg2;
+
+    if (args.size() >= 1)
+        arg0 = EGA_eval_arg(args[0], false);
+    if (args.size() >= 2)
+        arg1 = EGA_eval_arg(args[1], false);
+    if (args.size() >= 3)
+        arg2 = EGA_eval_arg(args[2], false);
+
+    MIdOrString type, name;
+    WORD lang = BAD_LANG;
+
+    if (arg0)
+        type = EGA_get_id_or_str(arg0);
+    if (arg1)
+        name = EGA_get_id_or_str(arg1);
+    if (arg2)
+        lang = (WORD)EGA_get_int(arg2);
+
+    EntrySet found;
+    g_res.search(found, ET_LANG, type, name, lang);
+
+    auto array = make_arg<AstContainer>(AST_ARRAY, 0, "RES_LIST");
+    for (auto& item : found)
+    {
+        auto child = make_arg<AstContainer>(AST_ARRAY, 0, "RES");
+        child->add(EGA_set_id_or_str(item->m_type));
+        child->add(EGA_set_id_or_str(item->m_name));
+        child->add(EGA::make_arg<AstInt>(item->m_lang));
+        array->add(child);
+    }
+    return array;
+}
+
+EGA::arg_t MMainWnd::DoEgaResDelete(const EGA::args_t& args)
+{
+    using namespace EGA;
+    arg_t arg0, arg1, arg2;
+
+    if (args.size() >= 1)
+        arg0 = EGA_eval_arg(args[0], false);
+    if (args.size() >= 2)
+        arg1 = EGA_eval_arg(args[1], false);
+    if (args.size() >= 3)
+        arg2 = EGA_eval_arg(args[2], false);
+
+    MIdOrString type, name;
+    WORD lang = BAD_LANG;
+
+    if (arg0)
+        type = EGA_get_id_or_str(arg0);
+    if (arg1)
+        name = EGA_get_id_or_str(arg1);
+    if (arg2)
+        lang = (WORD)EGA_get_int(arg2);
+
+    bool ret = g_res.search_and_delete(ET_ANY, type, name, lang);
+    g_res.delete_invalid();
+
+    if (ret)
+    {
+        DoSetFileModified(TRUE);
+
+        SelectTV(NULL, FALSE);
+    }
+
+    PostMessageW(s_hMainWnd, WM_COMMAND, ID_REFRESHALL, 0);
+
+    return make_arg<AstInt>(ret);
+}
+
+EGA::arg_t MMainWnd::DoEgaResCloneByName(const EGA::args_t& args)
+{
+    using namespace EGA;
+    arg_t arg0, arg1, arg2;
+
+    if (args.size() >= 1)
+        arg0 = EGA_eval_arg(args[0], false);
+    if (args.size() >= 2)
+        arg1 = EGA_eval_arg(args[1], false);
+    if (args.size() >= 3)
+        arg2 = EGA_eval_arg(args[2], false);
+
+    MIdOrString type, src_name, dest_name;
+    WORD lang = BAD_LANG;
+
+    if (arg0)
+        type = EGA_get_id_or_str(arg0);
+    if (arg1)
+        src_name = EGA_get_id_or_str(arg1);
+    if (arg2)
+        dest_name = EGA_get_id_or_str(arg2);
+
+    EntrySet found;
+    g_res.search(found, ET_LANG, type, src_name, lang);
+
+    if (type == RT_GROUP_ICON)     // group icon
+    {
+        for (auto e : found)
+        {
+            g_res.copy_group_icon(e, dest_name, e->m_lang);
+        }
+    }
+    else if (type == RT_GROUP_CURSOR)  // group cursor
+    {
+        for (auto e : found)
+        {
+            g_res.copy_group_cursor(e, dest_name, e->m_lang);
+        }
+    }
+    else    // otherwise
+    {
+        for (auto e : found)
+        {
+            g_res.add_lang_entry(e->m_type, dest_name, e->m_lang, e->m_data);
+        }
+    }
+
+    g_res.delete_invalid();
+
+    if (!found.empty())
+        DoSetFileModified(TRUE);
+
+    PostMessageW(s_hMainWnd, WM_COMMAND, ID_REFRESHALL, 0);
+
+    return make_arg<AstInt>(!found.empty());
+}
+
+EGA::arg_t MMainWnd::DoEgaResCloneByLang(const EGA::args_t& args)
+{
+    using namespace EGA;
+    arg_t arg0, arg1, arg2, arg3;
+
+    if (args.size() >= 1)
+        arg0 = EGA_eval_arg(args[0], false);
+    if (args.size() >= 2)
+        arg1 = EGA_eval_arg(args[1], false);
+    if (args.size() >= 3)
+        arg2 = EGA_eval_arg(args[2], false);
+    if (args.size() >= 4)
+        arg3 = EGA_eval_arg(args[3], false);
+
+    MIdOrString type, name;
+    WORD src_lang = BAD_LANG, dest_lang = BAD_LANG;
+
+    if (arg0)
+        type = EGA_get_id_or_str(arg0);
+    if (arg1)
+        name = EGA_get_id_or_str(arg1);
+    if (arg2)
+        src_lang = EGA_get_int(arg2);
+    if (arg3)
+        dest_lang = EGA_get_int(arg3);
+
+    EntrySet found2;
+    g_res.search(found2, ET_LANG, type, name, src_lang);
+
+    for (auto& entry : found2)
+    {
+        if (entry->m_type == RT_GROUP_ICON)     // group icon
+        {
+            // search the group icons
+            EntrySet found;
+            g_res.search(found, ET_LANG, RT_GROUP_ICON, name, src_lang);
+
+            // copy them
+            for (auto e : found)
+            {
+                g_res.copy_group_icon(e, e->m_name, dest_lang);
+            }
+        }
+        else if (entry->m_type == RT_GROUP_CURSOR)
+        {
+            // search the group cursors
+            EntrySet found;
+            g_res.search(found, ET_LANG, RT_GROUP_CURSOR, name, src_lang);
+
+            // copy them
+            for (auto e : found)
+            {
+                g_res.copy_group_cursor(e, e->m_name, dest_lang);
+            }
+        }
+        else if (entry->m_et == ET_STRING)
+        {
+            // search the strings
+            EntrySet found;
+            g_res.search(found, ET_LANG, RT_STRING, WORD(0), src_lang);
+
+            // copy them
+            for (auto e : found)
+            {
+                g_res.add_lang_entry(e->m_type, e->m_name, dest_lang, e->m_data);
+            }
+        }
+        else if (entry->m_et == ET_MESSAGE)
+        {
+            // search the messagetables
+            EntrySet found;
+            g_res.search(found, ET_LANG, RT_MESSAGETABLE, WORD(0), entry->m_lang);
+
+            // copy them
+            for (auto e : found)
+            {
+                g_res.add_lang_entry(e->m_type, e->m_name, dest_lang, e->m_data);
+            }
+        }
+        else
+        {
+            // search the entries
+            EntrySet found;
+            g_res.search(found, ET_LANG, entry->m_type, entry->m_name, entry->m_lang);
+
+            // copy them
+            for (auto e : found)
+            {
+                g_res.add_lang_entry(e->m_type, e->m_name, dest_lang, e->m_data);
+            }
+        }
+    }
+
+    g_res.delete_invalid();
+
+    if (!found2.empty())
+        DoSetFileModified(TRUE);
+
+    PostMessageW(s_hMainWnd, WM_COMMAND, ID_REFRESHALL, 0);
+
+    return make_arg<AstInt>(!found2.empty());
+}
+
+EGA::arg_t MMainWnd::DoEgaResConst(const EGA::args_t& args)
+{
+    using namespace EGA;
+    arg_t arg0 = EGA_eval_arg(args[0], true);
+    std::string name = EGA_get_str(arg0);
+    MAnsiToWide a2w(CP_ACP, name);
+
+    ConstantsDB::ValueType value;
+    BOOL bOK = g_db.GetValueOfName(a2w.c_str(), value);
+    if (!bOK)
+    {
+        for (auto& pair : g_settings.id_map)
+        {
+            if (name == pair.first)
+            {
+                value = strtol(pair.second.c_str(), NULL, 0);
+                bOK = TRUE;
+                break;
+            }
+        }
+    }
+
+    return make_arg<AstInt>(bOK ? value : 0);
+}
+
+EGA::arg_t MMainWnd::DoEgaResSetBinary(const EGA::args_t& args)
+{
+    using namespace EGA;
+    arg_t arg0, arg1, arg2, arg3;
+
+    arg0 = EGA_eval_arg(args[0], true);
+    arg1 = EGA_eval_arg(args[1], true);
+    arg2 = EGA_eval_arg(args[2], true);
+    arg3 = EGA_eval_arg(args[3], true);
+
+    MIdOrString type, name;
+    std::string contents;
+    WORD lang;
+
+    type = EGA_get_id_or_str(arg0);
+    name = EGA_get_id_or_str(arg1);
+    lang = EGA_get_int(arg2);
+    contents = EGA_get_str(arg3);
+    if (type.empty() || name.empty() || lang == BAD_LANG || contents.empty())
+        return make_arg<AstInt>(0);
+
+    DoSetFileModified(TRUE);
+
+    int ret = 0;
+    EntryBase::data_type data(contents.begin(), contents.end());
+    if (g_res.add_lang_entry(type, name, lang, data))
+        ret = 1;
+
+    PostMessageW(s_hMainWnd, WM_COMMAND, ID_REFRESHALL, 0);
+
+    return make_arg<AstInt>(ret);
+}
+
+EGA::arg_t MMainWnd::DoEgaResGetBinary(const EGA::args_t& args)
+{
+    using namespace EGA;
+    arg_t arg0, arg1, arg2;
+
+    if (args.size() >= 1)
+        arg0 = EGA_eval_arg(args[0], false);
+    if (args.size() >= 2)
+        arg1 = EGA_eval_arg(args[1], false);
+    if (args.size() >= 3)
+        arg2 = EGA_eval_arg(args[2], false);
+
+    MIdOrString type, name;
+    WORD lang = BAD_LANG;
+
+    if (arg0)
+        type = EGA_get_id_or_str(arg0);
+    if (arg1)
+        name = EGA_get_id_or_str(arg1);
+    if (arg2)
+        lang = EGA_get_int(arg2);
+
+    EntrySet found;
+    g_res.search(found, ET_LANG, type, name, lang);
+
+    std::string ret;
+    if (found.size())
+    {
+        for (auto e : found)
+        {
+            ret.resize(e->size());
+            memcpy(&ret[0], &e->m_data[0], e->size());
+            break;
+        }
+    }
+
+    return make_arg<AstStr>(ret);
+}
+
+EGA::arg_t MMainWnd::DoEgaResSelect(const EGA::args_t& args)
+{
+    using namespace EGA;
+    arg_t arg0, arg1, arg2;
+
+    if (args.size() >= 1)
+        arg0 = EGA_eval_arg(args[0], false);
+    if (args.size() >= 2)
+        arg1 = EGA_eval_arg(args[1], false);
+    if (args.size() >= 3)
+        arg2 = EGA_eval_arg(args[2], false);
+
+    MIdOrString type, name;
+    WORD lang = BAD_LANG;
+
+    if (arg0)
+        type = EGA_get_id_or_str(arg0);
+    if (arg1)
+        name = EGA_get_id_or_str(arg1);
+    if (arg2)
+        lang = EGA_get_int(arg2);
+
+    EntrySet found;
+    g_res.search(found, ET_LANG, type, name, lang);
+
+    if (found.size())
+    {
+        for (auto e : found)
+        {
+            SelectTV(e, FALSE);
+            break;
+        }
+    }
+
+    return make_arg<AstInt>(!found.empty());
+}
+
+EGA::arg_t MMainWnd::DoEgaResUnloadResH(const EGA::args_t& args)
+{
+    using namespace EGA;
+
+    UnloadResourceH(m_hwnd);
+
+    DoSetFileModified(TRUE);
+    PostMessageW(s_hMainWnd, WM_COMMAND, ID_REFRESHALL, 0);
+
+    return make_arg<AstInt>(1);
+}
+
+void EGA_extension(void)
+{
+    EGA_add_fn("RES_clone_by_lang", 4, 4, EGA_RES_clone_by_lang, "RES_clone_by_lang(type, name, src_lang, dest_lang)");
+    EGA_add_fn("RES_clone_by_name", 3, 3, EGA_RES_clone_by_name, "RES_clone_by_name(type, src_name, dest_name)");
+    EGA_add_fn("RES_delete", 0, 3, EGA_RES_delete, "RES_delete([type[, name[, lang]]])");
+    EGA_add_fn("RES_get_binary", 0, 3, EGA_RES_get_binary, "RES_get_binary([type[, name[, lang]]])");
+    EGA_add_fn("RES_set_binary", 4, 4, EGA_RES_set_binary, "RES_set_binary(type, name, lang, bin)");
+    EGA_add_fn("RES_const", 1, 1, EGA_RES_const, "RES_const(name)");
+    EGA_add_fn("RES_search", 0, 3, EGA_RES_search, "RES_search([type[, name[, lang]]])");
+    EGA_add_fn("RES_select", 0, 3, EGA_RES_select, "RES_select([type[, name[, lang]]])");
+    EGA_add_fn("RES_unload_resh", 0, 0, EGA_RES_unload_resh, "EGA_RES_unload_resh()");
+}
+
+////////////////////////////////////////////////////////////////////////////
+
+#ifdef _MSC_VER
+    // the manifest information
+    #pragma comment(linker, "/manifestdependency:\"type='win32' \
+      name='Microsoft.Windows.Common-Controls' \
+      version='6.0.0.0' \
+      processorArchitecture='*' \
+      publicKeyToken='6595b64144ccf1df' \
+      language='*'\"")
+#endif
 
 // the main function of the windows application
 extern "C"
@@ -13556,11 +16136,25 @@ wWinMain(HINSTANCE   hInstance,
          LPWSTR       lpCmdLine,
          INT         nCmdShow)
 {
+    SetEnvironmentVariableW(L"LANG", L"en_US");
+
+    {
+        WCHAR szPath[MAX_PATH];
+        GetModuleFileNameW(NULL, szPath, ARRAYSIZE(szPath));
+        if (wcschr(szPath, L' ') != NULL)
+        {
+            MessageBoxW(NULL,
+                        LoadStringDx(IDS_PATHSPACEERROR),
+                        NULL,
+                        MB_ICONERROR);
+        }
+    }
+
     // initialize the libraries
     OleInitialize(NULL);
 
-    // register MOleCtrl window class
-    MOleCtrl::RegisterDx();
+    // register MOleSite window class
+    MOleSite::RegisterDx();
 
     // initialize common controls
     INITCOMMONCONTROLSEX iccx;
@@ -13574,13 +16168,14 @@ wWinMain(HINSTANCE   hInstance,
                  ICC_NATIVEFNTCTL_CLASS |
                  ICC_STANDARD_CLASSES |
                  ICC_LINK_CLASS;
-    InitCommonControlsEx(&iccx);    
+    InitCommonControlsEx(&iccx);
 
     // load RichEdit
     HINSTANCE hinstRichEdit = LoadLibrary(TEXT("RICHED32.DLL"));
 
     HINSTANCE hinstUXTheme = LoadLibrary(TEXT("UXTHEME.DLL"));
-    s_pSetWindowTheme = (SETWINDOWTHEME)GetProcAddress(hinstUXTheme, "SetWindowTheme");
+    FARPROC fn = GetProcAddress(hinstUXTheme, "SetWindowTheme");
+    s_pSetWindowTheme = *reinterpret_cast<SETWINDOWTHEME *>(&fn);
 
     // load GDI+
     Gdiplus::GdiplusStartupInput gp_startup_input;
@@ -13591,17 +16186,27 @@ wWinMain(HINSTANCE   hInstance,
     int ret;
     MEditCtrl::SetCtrlAHookDx(TRUE);
     {
-        MMainWnd app(__argc, __targv, hInstance);
+#ifdef ATL_SUPPORT
+        ::AtlAxWinInit();
+        CComModule _Module;
+#endif
+        {
+            MMainWnd app(__argc, __targv, hInstance);
+            s_pMainWnd = &app;
 
-        if (app.StartDx())
-        {
-            // main loop
-            ret = INT(app.RunDx());
+            if (app.StartDx())
+            {
+                // main loop
+                ret = INT(app.RunDx());
+            }
+            else
+            {
+                ret = 2;
+            }
         }
-        else
-        {
-            ret = 2;
-        }
+#ifdef ATL_SUPPORT
+        ::AtlAxWinTerm();
+#endif
     }
     MEditCtrl::SetCtrlAHookDx(FALSE);
 

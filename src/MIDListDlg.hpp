@@ -17,13 +17,12 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //////////////////////////////////////////////////////////////////////////////
 
-#ifndef MZC4_MIDLISTDLG_HPP_
-#define MZC4_MIDLISTDLG_HPP_
+#pragma once
 
+#include "resource.h"
 #include "MWindowBase.hpp"
 #include "MTextToText.hpp"
 #include "MIdOrString.hpp"
-#include "resource.h"
 #include "MAddResIDDlg.hpp"
 #include "MModifyResIDDlg.hpp"
 #include "MResizable.hpp"
@@ -366,7 +365,7 @@ public:
             }
         }
 
-        EntrySetBase found;
+        EntrySet found;
         g_res.search(found, ET_LANG);
 
         for (auto entry : found)
@@ -449,8 +448,6 @@ public:
 
     void OnDrawItem(HWND hwnd, const DRAWITEMSTRUCT * lpDrawItem)
     {
-        INT iItem = lpDrawItem->itemID;
-
         const INT CX_ICON_SMALL = 16;
         const INT CY_ICON_SMALL = 16;
 
@@ -875,11 +872,24 @@ public:
         }
         else
         {
-            EnableMenuItem(hMenu, ID_MODIFYRESID, MF_ENABLED);
-            EnableMenuItem(hMenu, ID_COPYRESIDNAME, MF_ENABLED);
-            EnableMenuItem(hMenu, ID_COPYRESIDVALUE, MF_ENABLED);
-            EnableMenuItem(hMenu, ID_COPYIDDEF, MF_ENABLED);
-            EnableMenuItem(hMenu, ID_DELETERESID, MF_ENABLED);
+            ListView_GetItemText(m_hLst1, iItem, 0, szText, _countof(szText));
+            if (mchr_is_digit(szText[0]) || szText[0] == L'-' ||
+                lstrcmpW(szText, L"IDC_STATIC") == 0)
+            {
+                EnableMenuItem(hMenu, ID_MODIFYRESID, MF_GRAYED);
+                EnableMenuItem(hMenu, ID_COPYRESIDNAME, MF_ENABLED);
+                EnableMenuItem(hMenu, ID_COPYRESIDVALUE, MF_ENABLED);
+                EnableMenuItem(hMenu, ID_COPYIDDEF, MF_ENABLED);
+                EnableMenuItem(hMenu, ID_DELETERESID, MF_GRAYED);
+            }
+            else
+            {
+                EnableMenuItem(hMenu, ID_MODIFYRESID, MF_ENABLED);
+                EnableMenuItem(hMenu, ID_COPYRESIDNAME, MF_ENABLED);
+                EnableMenuItem(hMenu, ID_COPYRESIDVALUE, MF_ENABLED);
+                EnableMenuItem(hMenu, ID_COPYIDDEF, MF_ENABLED);
+                EnableMenuItem(hMenu, ID_DELETERESID, MF_ENABLED);
+            }
         }
     }
 
@@ -956,7 +966,3 @@ public:
         return 0;
     }
 };
-
-//////////////////////////////////////////////////////////////////////////////
-
-#endif  // ndef MZC4_MIDLISTDLG_HPP_

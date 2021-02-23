@@ -17,8 +17,7 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //////////////////////////////////////////////////////////////////////////////
 
-#ifndef MZC4_MTESTPARENTWND_HPP_
-#define MZC4_MTESTPARENTWND_HPP_
+#pragma once
 
 #include "MTestDialog.hpp"
 #include "MByteStreamEx.hpp"
@@ -72,6 +71,7 @@ public:
         POINT pt = { 0, 0 };
         SIZE siz = SizeFromRectDx(&rc);
         SetWindowPosDx(&pt, &siz);
+        m_test_dialog.SetWindowPosDx(&pt);
 
         ShowWindow(m_test_dialog, SW_SHOWNORMAL);
         UpdateWindow(m_test_dialog);
@@ -105,7 +105,3 @@ public:
         return 0;
     }
 };
-
-//////////////////////////////////////////////////////////////////////////////
-
-#endif  // ndef MZC4_MTESTPARENTWND_HPP_

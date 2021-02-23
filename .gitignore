@@ -33,3 +33,9 @@ risoheditor-*-setup.exe
 *~
 *.aps
 *-old
+Win32
+risoheditor-*.exe
+*-bak
+*.bak
+*.ninja
+.ninja_*

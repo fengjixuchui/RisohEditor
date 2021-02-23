@@ -17,14 +17,14 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //////////////////////////////////////////////////////////////////////////////
 
-#ifndef MZC4_MADDBITMAPDLG_HPP_
-#define MZC4_MADDBITMAPDLG_HPP_
+#pragma once
 
+#include "resource.h"
 #include "MWindowBase.hpp"
 #include "ConstantsDB.hpp"
 #include "Res.hpp"
 #include "MComboBoxAutoComplete.hpp"
-#include "resource.h"
+#include "MLangAutoComplete.hpp"
 
 void InitLangComboBox(HWND hCmb3, LANGID langid);
 BOOL CheckNameComboBox(HWND hCmb2, MIdOrString& name);
@@ -42,10 +42,22 @@ public:
     WORD m_lang;
     MComboBoxAutoComplete m_cmb2;
     MComboBoxAutoComplete m_cmb3;
+    MLangAutoComplete *m_pAutoComplete;
 
-    MAddBitmapDlg() : MDialogBase(IDD_ADDBITMAP), m_file(NULL)
+    MAddBitmapDlg()
+        : MDialogBase(IDD_ADDBITMAP)
+        , m_file(NULL)
+        , m_pAutoComplete(new MLangAutoComplete())
     {
         m_cmb3.m_bAcceptSpace = TRUE;
+        m_pAutoComplete->AddRef();
+    }
+
+    ~MAddBitmapDlg()
+    {
+        m_pAutoComplete->unbind();
+        m_pAutoComplete->Release();
+        m_pAutoComplete = NULL;
     }
 
     BOOL OnInitDialog(HWND hwnd, HWND hwndFocus, LPARAM lParam)
@@ -72,6 +84,12 @@ public:
             SetFocus(hCmb2);
             return FALSE;
         }
+
+        // auto complete
+        COMBOBOXINFO info = { sizeof(info) };
+        GetComboBoxInfo(m_cmb3, &info);
+        HWND hwndEdit = info.hwndItem;
+        m_pAutoComplete->bind(hwndEdit);
 
         return TRUE;
     }
@@ -132,7 +150,12 @@ public:
         std::wstring file;
         HWND hEdt1 = GetDlgItem(hwnd, edt1);
         if (!Edt1_CheckFile(hEdt1, file))
+        {
+            Edit_SetSel(hEdt1, 0, -1);  // select all
+            SetFocus(hEdt1);    // set focus
+            ErrorBoxDx(IDS_FILENOTFOUND);
             return;
+        }
 
         if (!g_res.add_bitmap(name, lang, file))
         {
@@ -202,7 +225,3 @@ public:
         return DefaultProcDx();
     }
 };
-
-//////////////////////////////////////////////////////////////////////////////
-
-#endif  // ndef MZC4_MADDBITMAPDLG_HPP_

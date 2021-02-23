@@ -17,14 +17,14 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //////////////////////////////////////////////////////////////////////////////
 
-#ifndef MZC4_MADDICONDLG_HPP_
-#define MZC4_MADDICONDLG_HPP_
+#pragma once
 
+#include "resource.h"
 #include "MWindowBase.hpp"
 #include "ConstantsDB.hpp"
 #include "Res.hpp"
 #include "MComboBoxAutoComplete.hpp"
-#include "resource.h"
+#include "MLangAutoComplete.hpp"
 
 void InitLangComboBox(HWND hCmb3, LANGID langid);
 BOOL CheckNameComboBox(HWND hCmb2, MIdOrString& name);
@@ -43,15 +43,23 @@ public:
     WORD m_lang;
     MComboBoxAutoComplete m_cmb2;
     MComboBoxAutoComplete m_cmb3;
+    MLangAutoComplete *m_pAutoComplete;
 
     MAddIconDlg()
-        : MDialogBase(IDD_ADDICON), m_file(NULL), m_hIcon(NULL)
+        : MDialogBase(IDD_ADDICON)
+        , m_file(NULL)
+        , m_hIcon(NULL)
+        , m_pAutoComplete(new MLangAutoComplete())
     {
+        m_pAutoComplete->AddRef();
         m_cmb3.m_bAcceptSpace = TRUE;
     }
 
     ~MAddIconDlg()
     {
+        m_pAutoComplete->unbind();
+        m_pAutoComplete->Release();
+        m_pAutoComplete = NULL;
         DestroyIcon(m_hIcon);
     }
 
@@ -77,6 +85,12 @@ public:
         SubclassChildDx(m_cmb3, cmb3);
 
         CenterWindowDx();
+
+        // auto complete
+        COMBOBOXINFO info = { sizeof(info) };
+        GetComboBoxInfo(m_cmb3, &info);
+        HWND hwndEdit = info.hwndItem;
+        m_pAutoComplete->bind(hwndEdit);
 
         if (m_file)
         {
@@ -115,7 +129,12 @@ public:
         std::wstring file;
         HWND hEdt1 = GetDlgItem(hwnd, edt1);
         if (!Edt1_CheckFile(hEdt1, file))
+        {
+            Edit_SetSel(hEdt1, 0, -1);  // select all
+            SetFocus(hEdt1);    // set focus
+            ErrorBoxDx(IDS_FILENOTFOUND);
             return;
+        }
 
         if (auto entry = g_res.find(ET_LANG, RT_GROUP_ICON, name, lang))
         {
@@ -221,7 +240,3 @@ public:
         Static_SetIcon(GetDlgItem(hwnd, ico1), m_hIcon);
     }
 };
-
-//////////////////////////////////////////////////////////////////////////////
-
-#endif  // ndef MZC4_MADDICONDLG_HPP_

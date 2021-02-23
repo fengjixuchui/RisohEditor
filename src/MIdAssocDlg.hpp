@@ -17,8 +17,7 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //////////////////////////////////////////////////////////////////////////////
 
-#ifndef MZC4_MIDASSOCDLG_HPP_
-#define MZC4_MIDASSOCDLG_HPP_
+#pragma once
 
 #include "MWindowBase.hpp"
 #include "MModifyAssocDlg.hpp"
@@ -164,14 +163,32 @@ public:
         }
     }
 
+    void OnItemChanged(HWND hwnd)
+    {
+        INT iItem = ListView_GetNextItem(m_hLst1, -1, LVNI_ALL | LVNI_SELECTED);
+        if (iItem == -1)
+        {
+            EnableWindow(GetDlgItem(hwnd, psh1), FALSE);
+        }
+        else
+        {
+            EnableWindow(GetDlgItem(hwnd, psh1), TRUE);
+        }
+    }
+
     LRESULT OnNotify(HWND hwnd, int idFrom, LPNMHDR pnmhdr)
     {
         if (pnmhdr->idFrom == lst1)
         {
-            if (pnmhdr->code == NM_DBLCLK)
+            switch (pnmhdr->code)
             {
+            case NM_DBLCLK:
                 OnPsh1(hwnd);
                 return 1;
+
+            case LVN_ITEMCHANGED:
+                OnItemChanged(hwnd);
+                break;
             }
         }
         return 0;
@@ -199,7 +216,3 @@ public:
         }
     }
 };
-
-//////////////////////////////////////////////////////////////////////////////
-
-#endif  // ndef MZC4_MIDASSOCDLG_HPP_

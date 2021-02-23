@@ -185,7 +185,7 @@ FILE *tmpfilenam(char *pathname)
 
 ////////////////////////////////////////////////////////////////////////////
 
-const char *g_cpp = "cpp";
+const char *g_cpp = "mcpp";
 const char *g_windres = "windres";
 
 char *g_input_file = NULL;
@@ -395,7 +395,6 @@ int do_directive(char*& ptr)
     {
         // #pragma
         ptr += 6;
-        char *ptr1 = ptr;
         ptr = mstr_skip_space(ptr);
         char *ptr2 = ptr;
         if (memcmp(ptr, "pack", 4) == 0)
@@ -817,6 +816,29 @@ int save_bin(const char *output_file)
     return EXITCODE_SUCCESS;
 }
 
+bool IsUTF16File(const char *input_file)
+{
+    if (FILE *fp = fopen(input_file, "rb"))
+    {
+        char ab[2];
+        if (fread(ab, 1, 2, fp) == 2)
+        {
+            if (memcmp(ab, "\xFF\xFE", 2) == 0)
+            {
+                fclose(fp);
+                return true;
+            }
+            if (ab[0] && !ab[1])
+            {
+                fclose(fp);
+                return true;
+            }
+        }
+        fclose(fp);
+    }
+    return false;
+}
+
 int load_rc(const char *input_file)
 {
     // definitions minus undefinitions
@@ -845,6 +867,12 @@ int load_rc(const char *input_file)
     {
         command_line += " -D";
         command_line += g_definitions[i];
+    }
+    for (size_t i = 0; i < g_include_directories.size(); ++i)
+    {
+        command_line += " -I\"";
+        command_line += g_include_directories[i];
+        command_line += "\"";
     }
     command_line += " \"";
     command_line += input_file;
@@ -1107,7 +1135,6 @@ int main(int argc, char **argv)
     // parse command line
     while (1)
     {
-        int this_option_optind = optind ? optind : 1;
         int option_index = 0;
         int c = getopt_long(argc, argv, "hVi:o:J:O:I:D:U:c:l:",
                             long_options, &option_index);

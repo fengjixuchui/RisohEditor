@@ -17,14 +17,13 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //////////////////////////////////////////////////////////////////////////////
 
-#ifndef MZC4_MDLGPROPDLG_HPP_
-#define MZC4_MDLGPROPDLG_HPP_
+#pragma once
 
+#include "resource.h"
 #include "MWindowBase.hpp"
 #include "RisohSettings.hpp"
 #include "ConstantsDB.hpp"
 #include "MComboBoxAutoComplete.hpp"
-#include "resource.h"
 #include "DialogRes.hpp"
 
 class MDlgPropDlg;
@@ -75,17 +74,19 @@ public:
         if (pszClass && pszClass[0])
         {
             table = g_db.GetTable(pszClass);
-            if (table.size())
+            for (auto& item : table)
             {
-                m_style_table.insert(m_style_table.end(), 
-                    table.begin(), table.end());
+                if (item.name.find(L'|') != std::wstring::npos)
+                    continue;
+                m_style_table.push_back(item);
             }
         }
         table = g_db.GetTable(TEXT("PARENT.STYLE"));
-        if (table.size())
+        for (auto& item : table)
         {
-            m_style_table.insert(m_style_table.end(), 
-                table.begin(), table.end());
+            if (item.name.find(L'|') != std::wstring::npos)
+                continue;
+            m_style_table.push_back(item);
         }
         m_style_selection.resize(m_style_table.size());
 
@@ -205,7 +206,7 @@ public:
         SubclassChildDx(m_cmb3, cmb3);
         SendDlgItemMessage(hwnd, cmb3, CB_LIMITTEXT, 64, 0);
 
-        SetDlgItemTextW(hwnd, cmb4, m_dialog_res.m_type_face.c_str_or_empty());
+        SetDlgItemTextW(hwnd, cmb4, m_dialog_res.type_face().c_str_or_empty());
         SendDlgItemMessage(hwnd, cmb4, CB_LIMITTEXT, LF_FULLFACESIZE - 1, 0);
 
         SetDlgItemInt(hwnd, edt5, m_dialog_res.m_point_size, TRUE);
@@ -384,7 +385,7 @@ public:
         m_dialog_res.m_weight = FW_NORMAL;
         m_dialog_res.m_italic = FALSE;
         m_dialog_res.m_charset = DEFAULT_CHARSET;
-        m_dialog_res.m_type_face = strFont.c_str();
+        m_dialog_res.type_face(strFont.c_str());
 
         m_dialog_res.m_weight = (bBold ? FW_BOLD : FW_DONTCARE);
         m_dialog_res.m_italic = (bItalic ? TRUE : FALSE);
@@ -541,6 +542,7 @@ public:
             {
                 OnEdt7(hwnd);
             }
+            break;
         case chx1:
             if (::IsDlgButtonChecked(hwnd, chx1) == BST_CHECKED)
             {
@@ -585,7 +587,3 @@ public:
         return DefaultProcDx();
     }
 };
-
-//////////////////////////////////////////////////////////////////////////////
-
-#endif  // ndef MZC4_MDLGPROPDLG_HPP_

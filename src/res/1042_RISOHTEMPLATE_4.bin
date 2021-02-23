@@ -1,0 +1,7 @@
+﻿1 MENU
+{
+    POPUP "파일(&F)"
+    {
+        MENUITEM "종료(&X)\tAlt+F4", 100
+    }
+}

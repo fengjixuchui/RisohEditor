@@ -17,12 +17,11 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //////////////////////////////////////////////////////////////////////////////
 
-#ifndef MZC4_MEXPORTOPTIONSDLG_HPP_
-#define MZC4_MEXPORTOPTIONSDLG_HPP_
+#pragma once
 
+#include "resource.h"
 #include "MWindowBase.hpp"
 #include "RisohSettings.hpp"
-#include "resource.h"
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -36,11 +35,12 @@ public:
     void Reload(HWND hwnd)
     {
         CheckDlgButton(hwnd, chx1, g_settings.bSepFilesByLang ? BST_CHECKED : BST_UNCHECKED);
-        CheckDlgButton(hwnd, chx2, g_settings.bStoreToResFolder ? BST_CHECKED : BST_UNCHECKED);
+        CheckDlgButton(hwnd, chx2, g_settings.bUseBeginEnd ? BST_CHECKED : BST_UNCHECKED);
         CheckDlgButton(hwnd, chx3, g_settings.bSelectableByMacro ? BST_CHECKED : BST_UNCHECKED);
         CheckDlgButton(hwnd, chx4, g_settings.bBackup ? BST_CHECKED : BST_UNCHECKED);
         CheckDlgButton(hwnd, chx5, g_settings.bRedundantComments ? BST_CHECKED : BST_UNCHECKED);
         CheckDlgButton(hwnd, chx6, g_settings.bWrapManifest ? BST_CHECKED : BST_UNCHECKED);
+        CheckDlgButton(hwnd, chx7, g_settings.bRCFileUTF16 ? BST_CHECKED : BST_UNCHECKED);
 
         SendDlgItemMessageW(hwnd, cmb1, CB_ADDSTRING, 0, (LPARAM)L"-old");
         SendDlgItemMessageW(hwnd, cmb1, CB_ADDSTRING, 0, (LPARAM)L"-bak");
@@ -59,11 +59,12 @@ public:
     void OnOK(HWND hwnd)
     {
         g_settings.bSepFilesByLang = (IsDlgButtonChecked(hwnd, chx1) == BST_CHECKED);
-        g_settings.bStoreToResFolder = (IsDlgButtonChecked(hwnd, chx2) == BST_CHECKED);
+        g_settings.bUseBeginEnd = (IsDlgButtonChecked(hwnd, chx2) == BST_CHECKED);
         g_settings.bSelectableByMacro = (IsDlgButtonChecked(hwnd, chx3) == BST_CHECKED);
         g_settings.bBackup = (IsDlgButtonChecked(hwnd, chx4) == BST_CHECKED);
         g_settings.bRedundantComments = (IsDlgButtonChecked(hwnd, chx5) == BST_CHECKED);
         g_settings.bWrapManifest = (IsDlgButtonChecked(hwnd, chx6) == BST_CHECKED);
+        g_settings.bRCFileUTF16 = (IsDlgButtonChecked(hwnd, chx7) == BST_CHECKED);
 
         WCHAR szText[32];
         GetDlgItemTextW(hwnd, cmb1, szText, _countof(szText));
@@ -100,7 +101,3 @@ public:
         return DefaultProcDx();
     }
 };
-
-//////////////////////////////////////////////////////////////////////////////
-
-#endif  // ndef MZC4_MEXPORTOPTIONSDLG_HPP_

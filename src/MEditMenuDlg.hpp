@@ -17,14 +17,13 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //////////////////////////////////////////////////////////////////////////////
 
-#ifndef MZC4_MEDITMENUDLG_HPP_
-#define MZC4_MEDITMENUDLG_HPP_
+#pragma once
 
+#include "resource.h"
 #include "MWindowBase.hpp"
 #include "RisohSettings.hpp"
 #include "ConstantsDB.hpp"
 #include "MComboBoxAutoComplete.hpp"
-#include "resource.h"
 
 #include "MenuRes.hpp"
 
@@ -464,7 +463,7 @@ public:
                 item.pszText = &str[0];
                 ListView_SetItem(m_hLst1, &item);
 
-                str = g_db.GetNameOfResID(IDTYPE_COMMAND, IDTYPE_NEWCOMMAND, element.menuId);
+                str = g_db.GetNameOfResID(IDTYPE_COMMAND, IDTYPE_NEWCOMMAND, element.menuId, true);
 
                 ZeroMemory(&item, sizeof(item));
                 item.iItem = i;
@@ -519,7 +518,7 @@ public:
                 item.pszText = &str[0];
                 ListView_SetItem(m_hLst1, &item);
 
-                str = g_db.GetNameOfResID(IDTYPE_COMMAND, IDTYPE_NEWCOMMAND, element.wMenuID);
+                str = g_db.GetNameOfResID(IDTYPE_COMMAND, IDTYPE_NEWCOMMAND, element.wMenuID, true);
 
                 ZeroMemory(&item, sizeof(item));
                 item.iItem = i;
@@ -959,7 +958,3 @@ public:
         }
     }
 };
-
-//////////////////////////////////////////////////////////////////////////////
-
-#endif  // ndef MZC4_MEDITMENUDLG_HPP_

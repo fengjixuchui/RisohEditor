@@ -2,7 +2,7 @@
 # pack.sh --- RisohEditor deploy script
 ################################################################################
 # RisohEditor --- Another free Win32 resource editor
-# Copyright (C) 2017-2018 Katayama Hirofumi MZ <katayama.hirofumi.mz@gmail.com>
+# Copyright (C) 2017-2021 Katayama Hirofumi MZ <katayama.hirofumi.mz@gmail.com>
 # 
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -19,10 +19,11 @@
 ################################################################################
 
 # TODO: Update the version number
-RE_VERSION=5.1.8
-RE_BIN_DIR="build/re-$RE_VERSION-bin"
-RE_FILES="README.txt READMEJP.txt LICENSE.txt Standardize.md HYOJUNKA.txt src/resource.h build/RisohEditor.exe mcdx/MESSAGETABLEDX.md"
-RE_TARGET="build/re-$RE_VERSION-bin.zip"
+RE_VERSION=5.5.2
+RE_NAME="RisohEditor-$RE_VERSION-no-inst"
+RE_BIN_DIR="build/$RE_NAME"
+RE_FILES="README.txt READMEJP.txt READMEIT.txt READMEKO.txt LICENSE.txt Standardize.md HYOJUNKA.txt TRANSLATORS.txt src/resource.h build/RisohEditor.exe mcdx/MESSAGETABLEDX.md"
+RE_TARGET="build/RisohEditor-$RE_VERSION-no-inst.zip"
 
 ################################################################################
 
@@ -61,65 +62,37 @@ fi
 
 ################################################################################
 
-echo Copying Stage 1...
-if cp $RE_FILES "$RE_BIN_DIR"; then
-    echo Copying Stage 2...
-    if cp -r data "$RE_BIN_DIR"; then
-        echo Copying Stage 3...
-        if cp build/mcdx.exe "$RE_BIN_DIR/data/bin"; then
-            echo Copying Stage 4...
-            mkdir "$RE_BIN_DIR/OLE"
-            if cp -f src/MOleCtrl.hpp include/MWindowBase.hpp "$RE_BIN_DIR/OLE"; then
-                echo Copying Stage 5...
-                mkdir "$RE_BIN_DIR/MyWndCtrl"
-                if cp -f "MyWndCtrl/MyWndCtrl.cpp" "MyWndCtrl/MWindowBase.hpp" "MyWndCtrl/CMakeLists.txt" "$RE_BIN_DIR/MyWndCtrl"; then
-                    echo Copying Stage 6...
-                    if cp -f build/MyWndCtrl.dll "$RE_BIN_DIR/MyWndCtrl"; then
-                        echo Copying Stage 7...
-                        mkdir "$RE_BIN_DIR/DlgInit"
-                        if cp -f "src/DlgInit.h" "$RE_BIN_DIR/DlgInit"; then
-                            echo Zipping...
-                            cd build
-                            if zip -9 -r -q "re-$RE_VERSION-bin.zip" "re-$RE_VERSION-bin"; then
-                                cd ..
-                                if [ -e "$RE_TARGET" ]; then
-                                    echo Success. "$RE_TARGET" was generated.
-                                else
-                                    echo ERROR: Target not found.
-                                    exit 13
-                                fi
-                            else
-                                cd ..
-                                echo ERROR: Zipping failed.
-                                exit 12
-                            fi
-                        else
-                            echo ERROR: Copying Stage 7 failed.
-                            exit 11
-                        fi
-                    else
-                        echo ERROR: Copying Stage 6 failed.
-                        exit 10
-                    fi
-                else
-                    echo ERROR: Copying Stage 5 failed.
-                    exit 9
-                fi
-            else
-                echo ERROR: Copying Stage 4 failed.
-                exit 8
-            fi
-        else
-            echo ERROR: Copying Stage 3 failed.
-            exit 7
-        fi
+cp $RE_FILES "$RE_BIN_DIR"
+cp -r data "$RE_BIN_DIR"
+cp build/mcdx.exe "$RE_BIN_DIR/data/bin"
+
+mkdir "$RE_BIN_DIR/OLE"
+cp -f src/MOleHost.hpp src/MOleHost.cpp src/MWindowBase.hpp "$RE_BIN_DIR/OLE"
+
+mkdir "$RE_BIN_DIR/MyWndCtrl"
+cp -f "MyWndCtrl/MyWndCtrl.cpp" "MyWndCtrl/MWindowBase.hpp" "MyWndCtrl/CMakeLists.txt" "$RE_BIN_DIR/MyWndCtrl"
+cp -f build/MyWndCtrl.dll "$RE_BIN_DIR/MyWndCtrl"
+
+mkdir "$RE_BIN_DIR/DlgInit"
+cp -f "src/DlgInit.h" "$RE_BIN_DIR/DlgInit"
+
+mkdir "$RE_BIN_DIR/EGA"
+cp -f "EGA/EGA-Manual.pdf" "$RE_BIN_DIR/EGA"
+cp -f EGA/samples/*.ega EGA-samples/*.ega "$RE_BIN_DIR/EGA"
+
+cd build
+if zip -9 -r -q "$RE_NAME.zip" "$RE_NAME"; then
+    cd ..
+    if [ -e "$RE_TARGET" ]; then
+        echo Success. "$RE_TARGET" is generated.
     else
-        echo ERROR: Copying Stage 2 failed.
-        exit 6
+        echo ERROR: Target not found.
+        exit 1
     fi
 else
-    echo ERROR: Copying Stage 1 failed.
-    exit 5
+    cd ..
+    echo ERROR: Zipping failed.
+    exit 12
 fi
 
 exit 0

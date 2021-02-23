@@ -17,9 +17,9 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //////////////////////////////////////////////////////////////////////////////
 
-#ifndef MZC4_MRADWINDOW_HPP_
-#define MZC4_MRADWINDOW_HPP_
+#pragma once
 
+#include "resource.h"
 #include "MWindowBase.hpp"
 #include "MRubberBand.hpp"
 #include "MIndexLabels.hpp"
@@ -30,10 +30,10 @@
 #include "PackedDIB.hpp"
 #include "Res.hpp"
 #include "IconRes.hpp"
-#include "resource.h"
 #include <map>
 #include <unordered_set>     // for std::unordered_set
 #include <climits>
+#include "MOleHost.hpp"
 
 class MRadCtrl;
 class MRadDialog;
@@ -115,7 +115,7 @@ public:
     // call me after subclassing
     void PostSubclass()
     {
-        SIZE siz;
+        SIZE siz = { 0, 0 };
         TCHAR szClass[16];
         GetWindowPosDx(m_hwnd, NULL, &siz);
         GetClassName(m_hwnd, szClass, _countof(szClass));
@@ -327,7 +327,7 @@ public:
                 // get the window rectangle relative to the parent
                 RECT rc;
                 GetWindowRect(*pCtrl, &rc);
-                MapWindowPoints(NULL, ::GetParent(*pCtrl), (LPPOINT)&rc, 2);
+                MapWindowRect(NULL, ::GetParent(*pCtrl), &rc);
 
                 // move the offset by dx and dy
                 OffsetRect(&rc, dx, dy);
@@ -1527,10 +1527,12 @@ public:
     MTitleToBitmap  m_title_to_bitmap;      // a title-to-bitmap mapping
     MTitleToIcon    m_title_to_icon;        // a title-to-icon mapping
     DialogItemClipboard m_clipboard;        // a clipboard manager
+    MOleHost *m_pOleHost;
 
     // constructor
     MRadWindow() : m_xDialogBaseUnit(0), m_yDialogBaseUnit(0),
-          m_hIcon(NULL), m_hIconSm(NULL), m_clipboard(m_dialog_res)
+        m_hIcon(NULL), m_hIconSm(NULL), m_clipboard(m_dialog_res),
+        m_pOleHost(NULL)
     {
     }
 
@@ -1625,26 +1627,26 @@ public:
     void ClientToDialog(POINT *ppt)
     {
         GetBaseUnits(m_xDialogBaseUnit, m_yDialogBaseUnit);
-        ppt->x = (ppt->x * 4) / m_xDialogBaseUnit;
-        ppt->y = (ppt->y * 8) / m_yDialogBaseUnit;
+        ppt->x = MulDiv(ppt->x, 4, m_xDialogBaseUnit);
+        ppt->y = MulDiv(ppt->y, 8, m_yDialogBaseUnit);
     }
 
     // convert the coordinates
     void ClientToDialog(SIZE *psiz)
     {
         GetBaseUnits(m_xDialogBaseUnit, m_yDialogBaseUnit);
-        psiz->cx = (psiz->cx * 4) / m_xDialogBaseUnit;
-        psiz->cy = (psiz->cy * 8) / m_yDialogBaseUnit;
+        psiz->cx = MulDiv(psiz->cx, 4, m_xDialogBaseUnit);
+        psiz->cy = MulDiv(psiz->cy, 8, m_yDialogBaseUnit);
     }
 
     // convert the coordinates
     void ClientToDialog(RECT *prc)
     {
         GetBaseUnits(m_xDialogBaseUnit, m_yDialogBaseUnit);
-        prc->left = (prc->left * 4) / m_xDialogBaseUnit;
-        prc->right = (prc->right * 4) / m_xDialogBaseUnit;
-        prc->top = (prc->top * 8) / m_yDialogBaseUnit;
-        prc->bottom = (prc->bottom * 8) / m_yDialogBaseUnit;
+        prc->left = MulDiv(prc->left, 4, m_xDialogBaseUnit);
+        prc->right = MulDiv(prc->right, 4, m_xDialogBaseUnit);
+        prc->top = MulDiv(prc->top, 8, m_yDialogBaseUnit);
+        prc->bottom = MulDiv(prc->bottom, 8, m_yDialogBaseUnit);
     }
 
     // convert the coordinates
@@ -1734,15 +1736,24 @@ public:
             DestroyWindow(m_rad_dialog);
         }
 
+        if (m_pOleHost)
+        {
+            delete m_pOleHost;
+            m_pOleHost = NULL;
+        }
+
+        m_pOleHost = new MOleHost();
+        DoSetActiveOleHost(m_pOleHost);
+
         // get the resource data
-        m_dialog_res.Fixup(false);
+        m_dialog_res.FixupForRad(false);
         std::vector<BYTE> data = m_dialog_res.data();
 #if 0
         MFile file(TEXT("modified.bin"), TRUE);
         DWORD cbWritten;
         file.WriteFile(&data[0], (DWORD)data.size(), &cbWritten);
 #endif
-        m_dialog_res.Fixup(true);
+        m_dialog_res.FixupForRad(true);
 
         // create the MRadDialog window from data
         if (!m_rad_dialog.CreateDialogIndirectDx(hwnd, &data[0]))
@@ -1803,7 +1814,7 @@ public:
             if (auto pCtrl = MRadCtrl::GetRadCtrl(hCtrl))
             {
                 // get the size
-                SIZE siz;
+                SIZE siz = { 0, 0 };
                 GetWindowPosDx(hCtrl, NULL, &siz);
 
                 if (pCtrl->m_nImageType == 1)
@@ -1906,9 +1917,15 @@ public:
     // MRadWindow WM_DESTROY
     void OnDestroy(HWND hwnd)
     {
+        if (m_pOleHost)
+        {
+            delete m_pOleHost;
+            m_pOleHost = NULL;
+        }
+
         // post ID_DESTROYRAD to the owner
         HWND hwndOwner = GetWindow(hwnd, GW_OWNER);
-        SendMessage(hwndOwner, WM_COMMAND, ID_DESTROYRAD, 0);
+        PostMessage(hwndOwner, WM_COMMAND, ID_DESTROYRAD, 0);
 
         // notify selection change to the owner
         MRadCtrl::GetTargetIndeces().clear();
@@ -1997,23 +2014,23 @@ public:
         HWND hwndSel = MRadCtrl::GetLastSel();
         if (hwndSel == NULL)    // no
         {
-			// report the selection change to the owner window
-			SendMessage(hwndOwner, MYWM_SELCHANGE, 0, 0);
-		
-			// clear the status
+            // report the selection change to the owner window
+            SendMessage(hwndOwner, MYWM_SELCHANGE, 0, 0);
+        
+            // clear the status
             SendMessage(hwndOwner, MYWM_CLEARSTATUS, 0, 0);
 
-			return 0;
+            return 0;
         }
 
         // get the MRadCtrl pointer
         auto pCtrl = MRadCtrl::GetRadCtrl(hwndSel);
         if (pCtrl == NULL)
         {
-			// report the selection change to the owner window
-			SendMessage(hwndOwner, MYWM_SELCHANGE, 0, 0);
+            // report the selection change to the owner window
+            SendMessage(hwndOwner, MYWM_SELCHANGE, 0, 0);
 
-			// clear the status
+            // clear the status
             SendMessage(hwndOwner, MYWM_CLEARSTATUS, 0, 0);
             return 0;
         }
@@ -2128,7 +2145,7 @@ public:
         for (size_t i = m_dialog_res.size(); i > 0;)
         {
             --i;
-            if (indeces.find(i) != indeces.end())
+            if (indeces.find(INT(i)) != indeces.end())
             {
                 m_dialog_res.m_items.erase(m_dialog_res.m_items.begin() + i);
                 --m_dialog_res.m_cItems;
@@ -2417,7 +2434,6 @@ public:
                     items[i].m_pt.y += s_nShift;
                 }
 
-                INT nIndex = INT(m_dialog_res.m_items.size());
                 for (size_t i = 0; i < items.size(); ++i)
                 {
                     m_dialog_res.m_cItems++;
@@ -2590,16 +2606,13 @@ public:
         if (indeces.empty())
             return FALSE;   // no
 
-        INT iSelected = -1;
         INT iUnselected = -1;
-        for (INT i = 0; i < m_dialog_res.m_cItems; ++i)
+        for (UINT i = 0; i < m_dialog_res.m_cItems; ++i)
         {
             if (indeces.find(i) != indeces.end())
             {
                 if (iUnselected != -1)
                     return TRUE;    // yes
-
-                iSelected = i;
             }
             else
             {
@@ -2619,7 +2632,7 @@ public:
 
         // move the dialog items
         DialogItems items1, items2;
-        for (INT i = 0; i < m_dialog_res.m_cItems; ++i)
+        for (UINT i = 0; i < m_dialog_res.m_cItems; ++i)
         {
             if (indeces.find(i) == indeces.end())
             {
@@ -2645,7 +2658,6 @@ public:
             return FALSE;
 
         // find two items to swap
-        INT iSelected = -1;
         INT iUnselected = -1;
         for (INT i = m_dialog_res.m_cItems - 1; i >= 0; --i)
         {
@@ -2653,8 +2665,6 @@ public:
             {
                 if (iUnselected != -1)
                     return TRUE;
-
-                iSelected = i;
             }
             else
             {
@@ -2674,7 +2684,7 @@ public:
 
         // move the dialog items
         DialogItems items1, items2;
-        for (INT i = 0; i < m_dialog_res.m_cItems; ++i)
+        for (UINT i = 0; i < m_dialog_res.m_cItems; ++i)
         {
             if (indeces.find(i) == indeces.end())
             {
@@ -2742,7 +2752,7 @@ public:
             return;
 
         // move the dialog items
-        for (INT i = m_dialog_res.m_cItems - 1; i > 0; --i)
+        for (UINT i = m_dialog_res.m_cItems - 1; i > 0; --i)
         {
             if (indeces.find(i - 1) != indeces.end())
             {
@@ -3100,7 +3110,3 @@ public:
         UpdateRes();
     }
 };
-
-//////////////////////////////////////////////////////////////////////////////
-
-#endif  // ndef MZC4_MRADWINDOW_HPP_

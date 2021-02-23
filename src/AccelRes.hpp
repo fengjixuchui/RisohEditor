@@ -17,16 +17,16 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //////////////////////////////////////////////////////////////////////////////
 
-#ifndef ACCEL_RES_HPP_
-#define ACCEL_RES_HPP_
+#pragma once
 
-#include <windows.h>
+#ifndef _INC_WINDOWS
+    #include <windows.h>
+#endif
 #include <cassert>
 #include <vector>
 
 #include "MByteStreamEx.hpp"
 #include "MString.hpp"
-#include "ConstantsDB.hpp"
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -54,114 +54,11 @@ public:
     typedef std::vector<entry_type>     entries_type;
     AccelRes() { }
 
-    bool LoadFromStream(const MByteStreamEx& stream)
-    {
-        m_entries.clear();
-        if (stream.size() < sizeof(entry_type))
-            return false;
+    bool LoadFromStream(const MByteStreamEx& stream);
+    MStringW Dump(const MIdOrString &id_or_str) const;
+    void Update();
 
-        entry_type entry;
-        size_t i, count = stream.size() / sizeof(entry_type);
-        for (i = 0; i < count; ++i)
-        {
-            if (!stream.ReadRaw(entry))
-                return false;
-
-            m_entries.push_back(entry);
-
-            if (entry.fFlags & 0x80)
-                break;
-        }
-
-        return true;
-    }
-
-    void Update()
-    {
-        size_t i, count = m_entries.size();
-        for (i = 0; i < count; ++i)
-        {
-            entry_type& entry = m_entries[i];
-
-            if (i + 1 == count)
-                entry.fFlags |= 0x80;
-            else
-                entry.fFlags &= ~0x80;
-        }
-    }
-
-    std::vector<BYTE> data() const
-    {
-        size_t size = m_entries.size() * sizeof(entry_type);
-        const BYTE *pb = (const BYTE *)&m_entries[0];
-        return std::vector<BYTE>(pb, pb + size);
-    }
-
-    MStringW Dump(const MIdOrString &id_or_str) const
-    {
-        MStringW ret;
-
-        if (id_or_str.m_id == 0)
-        {
-            ret += id_or_str.str();
-        }
-        else
-        {
-            ret += g_db.GetNameOfResID(IDTYPE_ACCEL, id_or_str.m_id);
-        }
-        ret += L" ";
-        ret += L"ACCELERATORS\r\n";
-        ret += L"{\r\n";
-
-        for (auto& entry : m_entries)
-        {
-            bool VIRTKEY = !!(entry.fFlags & FVIRTKEY);
-            bool NOINVERT = !!(entry.fFlags & FNOINVERT);
-            bool SHIFT = !!(entry.fFlags & FSHIFT);
-            bool CONTROL = !!(entry.fFlags & FCONTROL);
-            bool ALT = !!(entry.fFlags & FALT);
-
-            ret += L"    ";
-            if (VIRTKEY)
-            {
-                ret += g_db.GetName(L"VIRTUALKEYS", entry.wAscii);
-            }
-            else
-            {
-                std::string str;
-                str += (char)entry.wAscii;
-                ret += MAnsiToWide(CP_ACP, mstr_quote(str));
-            }
-            ret += L", ";
-            if (0)
-            {
-                ret += mstr_dec_word(entry.wId);
-            }
-            else
-            {
-                ret += g_db.GetNameOfResID(IDTYPE_COMMAND, IDTYPE_NEWCOMMAND, entry.wId);
-            }
-
-            if (NOINVERT)
-                ret += L", NOINVERT";
-            if (ALT)
-                ret += L", ALT";
-            if (CONTROL)
-                ret += L", CONTROL";
-            if (SHIFT)
-                ret += L", SHIFT";
-
-            if (VIRTKEY)
-                ret += L", VIRTKEY";
-            else
-                ret += L", ASCII";
-
-            ret += L"\r\n";
-        }
-
-        ret += L"}\r\n";
-        return ret;
-    }
+    std::vector<BYTE> data() const;
 
     entries_type& entries()
     {
@@ -214,7 +111,3 @@ inline void SetKeyFlags(WORD& fFlags, const MStringW& str)
     if (str.find(L"A") != MStringW::npos)
         fFlags |= FALT;
 }
-
-//////////////////////////////////////////////////////////////////////////////
-
-#endif  // ndef ACCEL_RES_HPP_

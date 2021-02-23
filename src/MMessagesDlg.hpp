@@ -17,17 +17,15 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //////////////////////////////////////////////////////////////////////////////
 
-#ifndef MZC4_MMESSAGESDLG_HPP_
-#define MZC4_MMESSAGESDLG_HPP_
+#pragma once
 
+#include "resource.h"
 #include "MWindowBase.hpp"
 #include "RisohSettings.hpp"
 #include "ConstantsDB.hpp"
 #include "Res.hpp"
 #include "MResizable.hpp"
 #include "MComboBoxAutoComplete.hpp"
-#include "resource.h"
-
 #include "MessageRes.hpp"
 
 class MAddMsgDlg;
@@ -561,7 +559,3 @@ public:
         return DefaultProcDx();
     }
 };
-
-//////////////////////////////////////////////////////////////////////////////
-
-#endif  // ndef MZC4_MMESSAGESDLG_HPP_

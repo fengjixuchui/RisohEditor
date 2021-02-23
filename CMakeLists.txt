@@ -4,13 +4,14 @@
 ##############################################################################
 
 # CMake minimum version
-cmake_minimum_required(VERSION 2.4)
+cmake_minimum_required(VERSION 2.9)
 
 # use new policy
 cmake_policy(SET CMP0054 NEW)
+cmake_policy(SET CMP0003 NEW)
 
-# project name and language
-project(RisohEditor CXX)
+# project name and languages
+project(RisohEditor CXX RC)
 
 # check build type
 if (NOT CMAKE_BUILD_TYPE)
@@ -40,13 +41,13 @@ endif()
 if (WIN32)
     if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
         # using Clang
-        set(CMAKE_C_FLAGS "-static")
-        set(CMAKE_CXX_FLAGS "-static")
+        set(CMAKE_C_FLAGS "-static -W -Wno-missing-field-initializers")
+        set(CMAKE_CXX_FLAGS "-static -W -Wno-missing-field-initializers")
     elseif (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
         # using GCC
-        set(CMAKE_C_FLAGS "-static -static-libgcc -static-libstdc++")
-        set(CMAKE_CXX_FLAGS "-static -static-libgcc -static-libstdc++")
-    elseif (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+        set(CMAKE_C_FLAGS "-static -W -Wno-missing-field-initializers")
+        set(CMAKE_CXX_FLAGS "-static -W -Wno-missing-field-initializers")
+    elseif (MSVC)
         # replace "/MD" with "/MT" (building without runtime DLLs)
         set(CompilerFlags
             CMAKE_C_FLAGS
@@ -63,12 +64,10 @@ if (WIN32)
     endif()
 endif()
 
-# enable Win32 resource
-ENABLE_LANGUAGE(RC)
-
 ##############################################################################
 
-add_definitions(-DMZC4_HANDLE_MAP=1 -DUSE_GLOBALS=1 -D_CRT_SECURE_NO_WARNINGS -D_CRT_NON_CONFORMING_WCSTOK -D_SCL_SECURE_NO_WARNINGS)
+add_definitions(-DMZC4_HANDLE_MAP=1 -DUSE_GLOBALS=1)
+add_definitions(-D_CRT_SECURE_NO_WARNINGS -D_CRT_NON_CONFORMING_WCSTOK -D_SCL_SECURE_NO_WARNINGS)
 
 add_subdirectory(src)
 add_subdirectory(tests)

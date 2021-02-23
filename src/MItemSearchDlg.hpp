@@ -17,12 +17,11 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //////////////////////////////////////////////////////////////////////////////
 
-#ifndef MZC4_MITEMSEARCHDLG_HPP_
-#define MZC4_MITEMSEARCHDLG_HPP_
+#pragma once
 
+#include "resource.h"
 #include "MWindowBase.hpp"
 #include "RisohSettings.hpp"
-#include "resource.h"
 
 #include "ResToText.hpp"
 #include "Res.hpp"
@@ -31,29 +30,39 @@
 struct ITEM_SEARCH;
 class MItemSearchDlg;
 
+#define MYWM_ITEMSEARCH (WM_USER + 113)
+
 //////////////////////////////////////////////////////////////////////////////
 
 struct ITEM_SEARCH
 {
     ResToText   res2text;
-    BOOL        bIgnoreCases = TRUE;
-    BOOL        bDownward = TRUE;
-    BOOL        bInternalText = TRUE;
-    BOOL        bRunning = FALSE;
-    BOOL        bCancelled = FALSE;
+    BOOL        bIgnoreCases;
+    BOOL        bDownward;
+    BOOL        bRunning;
+    BOOL        bCancelled;
     MString     strText;
-    EntryBase  *pCurrent = NULL;
-    EntryBase  *pFound = NULL;
+    EntryBase  *pCurrent;
+    EntryBase  *pFound;
+    ITEM_SEARCH()
+    {
+        bIgnoreCases = TRUE;
+        bDownward = TRUE;
+        bRunning = FALSE;
+        bCancelled = FALSE;
+        pCurrent = NULL;
+        pFound = NULL;
+    }
 };
 
 class MItemSearchDlg : public MDialogBase
 {
 public:
+    ITEM_SEARCH& m_search;
     HICON m_hIcon;
     HICON m_hIconSm;
-    ITEM_SEARCH& m_search;
 
-    MItemSearchDlg(ITEM_SEARCH& search) 
+    MItemSearchDlg(ITEM_SEARCH& search)
         : MDialogBase(IDD_ITEMSEARCH), m_search(search),
           m_hIcon(LoadIconDx(IDI_FIND)), m_hIconSm(LoadSmallIconDx(IDI_FIND))
     {
@@ -90,6 +99,8 @@ public:
     {
         Dialogs().insert(this);
 
+        SetDlgItemText(hwnd, edt1, m_search.strText.c_str());
+
         if (m_search.bDownward)
             CheckRadioButton(hwnd, rad1, rad2, rad2);
         else
@@ -100,8 +111,6 @@ public:
 
         if (!m_search.bIgnoreCases)
             CheckDlgButton(hwnd, chx1, BST_CHECKED);
-        if (m_search.bInternalText)
-            CheckDlgButton(hwnd, chx2, BST_CHECKED);
 
         CenterWindowDx();
         return TRUE;
@@ -113,12 +122,14 @@ public:
             return;
 
         m_search.strText = GetDlgItemText(edt1);
+        if (m_search.strText.empty())
+            return;
+
         m_search.bIgnoreCases = IsDlgButtonChecked(hwnd, chx1) == BST_UNCHECKED;
         m_search.bDownward = IsDlgButtonChecked(hwnd, rad2) == BST_CHECKED;
-        m_search.bInternalText = IsDlgButtonChecked(hwnd, chx2) == BST_CHECKED;
         m_search.bRunning = TRUE;
         EnableWindow(GetDlgItem(hwnd, IDOK), FALSE);
-        SendMessage(GetParent(hwnd), WM_COMMAND, ID_ITEMSEARCHBANG, (WPARAM)this);
+        SendMessage(GetParent(hwnd), MYWM_ITEMSEARCH, 0, (LPARAM)this);
     }
 
     void OnCommand(HWND hwnd, int id, HWND hwndCtl, UINT codeNotify)
@@ -156,7 +167,3 @@ public:
         return 0;
     }
 };
-
-//////////////////////////////////////////////////////////////////////////////
-
-#endif  // ndef MZC4_MITEMSEARCHDLG_HPP_

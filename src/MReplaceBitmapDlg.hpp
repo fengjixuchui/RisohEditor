@@ -17,14 +17,13 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //////////////////////////////////////////////////////////////////////////////
 
-#ifndef MZC4_MREPLACEBITMAPDLG_HPP_
-#define MZC4_MREPLACEBITMAPDLG_HPP_
+#pragma once
 
+#include "resource.h"
 #include "MWindowBase.hpp"
 #include "RisohSettings.hpp"
 #include "ConstantsDB.hpp"
 #include "Res.hpp"
-#include "resource.h"
 
 void InitLangComboBox(HWND hCmb3, LANGID langid);
 BOOL CheckNameComboBox(HWND hCmb2, MIdOrString& name);
@@ -81,7 +80,12 @@ public:
         std::wstring file;
         HWND hEdt1 = GetDlgItem(hwnd, edt1);
         if (!Edt1_CheckFile(hEdt1, file))
+        {
+            Edit_SetSel(hEdt1, 0, -1);  // select all
+            SetFocus(hEdt1);    // set focus
+            ErrorBoxDx(IDS_FILENOTFOUND);
             return;
+        }
 
         if (!g_res.add_bitmap(name, lang, file))
         {
@@ -156,7 +160,3 @@ public:
         return 0;
     }
 };
-
-//////////////////////////////////////////////////////////////////////////////
-
-#endif  // ndef MZC4_MREPLACEBITMAPDLG_HPP_

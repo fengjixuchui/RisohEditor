@@ -17,13 +17,11 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //////////////////////////////////////////////////////////////////////////////
 
-#ifndef MZC4_MVERSIONINFODLG_HPP_
-#define MZC4_MVERSIONINFODLG_HPP_
+#pragma once
 
-#include "RisohEditor.hpp"
+#include "resource.h"
 #include "DialogRes.hpp"
 #include "MString.hpp"
-#include "resource.h"
 #include "MToolBarCtrl.hpp"
 #include "MHyperLinkCtrl.hpp"
 
@@ -90,7 +88,3 @@ public:
 protected:
     MHyperLinkCtrl m_hyperlink;
 };
-
-//////////////////////////////////////////////////////////////////////////////
-
-#endif  // ndef MZC4_MVERSIONINFODLG_HPP_

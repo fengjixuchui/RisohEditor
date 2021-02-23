@@ -17,14 +17,13 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //////////////////////////////////////////////////////////////////////////////
 
-#ifndef MZC4_MMACROSDLG_HPP_
-#define MZC4_MMACROSDLG_HPP_
+#pragma once
 
+#include "resource.h"
 #include "MWindowBase.hpp"
 #include "RisohSettings.hpp"
 #include "MResizable.hpp"
 #include "MComboBoxAutoComplete.hpp"
-#include "resource.h"
 
 struct MACRO_ENTRY;
 class MAddMacroDlg;
@@ -58,10 +57,7 @@ public:
     {
         CheckDlgButton(hwnd, chx1, BST_CHECKED);
 
-        HWND hCmb1 = GetDlgItem(hwnd, cmb1);
         SubclassChildDx(m_cmb1, cmb1);
-
-        HWND hCmb2 = GetDlgItem(hwnd, cmb2);
         SubclassChildDx(m_cmb2, cmb2);
 
         CenterWindowDx();
@@ -156,11 +152,7 @@ public:
     BOOL OnInitDialog(HWND hwnd, HWND hwndFocus, LPARAM lParam)
     {
         CheckDlgButton(hwnd, chx1, BST_CHECKED);
-
-        HWND hCmb1 = GetDlgItem(hwnd, cmb1);
         SubclassChildDx(m_cmb1, cmb1);
-
-        HWND hCmb2 = GetDlgItem(hwnd, cmb2);
         SubclassChildDx(m_cmb2, cmb2);
 
         SetWindowText(m_cmb1, m_entry.szKey);
@@ -525,7 +517,6 @@ public:
         BOOL bSelected = (iItem != -1);
         EnableWindow(GetDlgItem(hwnd, psh2), bSelected);
         EnableWindow(GetDlgItem(hwnd, psh3), bSelected);
-        EnableWindow(GetDlgItem(hwnd, psh7), bSelected);
     }
 
     virtual INT_PTR CALLBACK
@@ -618,7 +609,3 @@ public:
         return TRUE;
     }
 };
-
-//////////////////////////////////////////////////////////////////////////////
-
-#endif  // ndef MZC4_MMACROSDLG_HPP_

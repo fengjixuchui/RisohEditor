@@ -17,16 +17,15 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //////////////////////////////////////////////////////////////////////////////
 
-#ifndef MZC4_MCONFIGDLG_HPP_
-#define MZC4_MCONFIGDLG_HPP_
+#pragma once
 
+#include "resource.h"
 #include "MWindowBase.hpp"
 #include "RisohSettings.hpp"
 #include "ConstantsDB.hpp"
 #include "MMacrosDlg.hpp"
 #include "MPathsDlg.hpp"
 #include "MFontsDlg.hpp"
-#include "resource.h"
 
 //////////////////////////////////////////////////////////////////////////////
 
@@ -39,7 +38,7 @@ public:
 
     void Reload(HWND hwnd)
     {
-        CheckDlgButton(hwnd, chx1, g_settings.bAlwaysControl ? BST_CHECKED : BST_UNCHECKED);
+        CheckDlgButton(hwnd, chx1, g_settings.bShowFullPath ? BST_CHECKED : BST_UNCHECKED);
         CheckDlgButton(hwnd, chx2, g_settings.bHideID ? BST_CHECKED : BST_UNCHECKED);
         CheckDlgButton(hwnd, chx3, g_settings.bResumeWindowPos ? BST_CHECKED : BST_UNCHECKED);
         CheckDlgButton(hwnd, chx4, g_settings.bAutoLoadNearbyResH ? BST_CHECKED : BST_UNCHECKED);
@@ -58,16 +57,26 @@ public:
         SetDlgItemTextW(hwnd, cmb2, g_settings.strBackupSuffix.c_str());
     }
 
+    void Cmb1_AddString(HWND hwnd, LPCWSTR text)
+    {
+        if ((INT)SendDlgItemMessage(hwnd, cmb1, CB_FINDSTRINGEXACT, -1, (LPARAM)text) == CB_ERR)
+        {
+            SendDlgItemMessage(hwnd, cmb1, CB_ADDSTRING, 0, (LPARAM)text);
+        }
+    }
+
     BOOL OnInitDialog(HWND hwnd, HWND hwndFocus, LPARAM lParam)
     {
         SendDlgItemMessage(hwnd, scr1, UDM_SETRANGE, 0, MAKELPARAM(9999, -9999));
-        SendDlgItemMessage(hwnd, cmb1, CB_ADDSTRING, 0, LPARAM(TEXT("AtlAxWin")));
-        SendDlgItemMessage(hwnd, cmb1, CB_ADDSTRING, 0, LPARAM(TEXT("AtlAxWin71")));
-        SendDlgItemMessage(hwnd, cmb1, CB_ADDSTRING, 0, LPARAM(TEXT("AtlAxWin80")));
-        SendDlgItemMessage(hwnd, cmb1, CB_ADDSTRING, 0, LPARAM(TEXT("AtlAxWin90")));
-        SendDlgItemMessage(hwnd, cmb1, CB_ADDSTRING, 0, LPARAM(TEXT("AtlAxWin100")));
-        SendDlgItemMessage(hwnd, cmb1, CB_ADDSTRING, 0, LPARAM(TEXT("AtlAxWin110")));
-        SendDlgItemMessage(hwnd, cmb1, CB_ADDSTRING, 0, LPARAM(TEXT("MOleCtrl")));
+        Cmb1_AddString(hwnd, TEXT("AtlAxWin"));
+        Cmb1_AddString(hwnd, TEXT("AtlAxWin71"));
+        Cmb1_AddString(hwnd, TEXT("AtlAxWin80"));
+        Cmb1_AddString(hwnd, TEXT("AtlAxWin90"));
+        Cmb1_AddString(hwnd, TEXT("AtlAxWin100"));
+        Cmb1_AddString(hwnd, TEXT("AtlAxWin110"));
+#ifdef ATL_SUPPORT
+        Cmb1_AddString(hwnd, TEXT(ATLAXWIN_CLASS));
+#endif
 
         Reload(hwnd);
         CenterWindowDx();
@@ -88,7 +97,7 @@ public:
         }
         g_settings.nComboHeight = nHeight;
 
-        g_settings.bAlwaysControl = (IsDlgButtonChecked(hwnd, chx1) == BST_CHECKED);
+        g_settings.bShowFullPath = (IsDlgButtonChecked(hwnd, chx1) == BST_CHECKED);
         g_settings.bHideID = (IsDlgButtonChecked(hwnd, chx2) == BST_CHECKED);
         g_settings.bResumeWindowPos = (IsDlgButtonChecked(hwnd, chx3) == BST_CHECKED);
         g_settings.bAutoLoadNearbyResH = (IsDlgButtonChecked(hwnd, chx4) == BST_CHECKED);
@@ -176,7 +185,3 @@ public:
         return DefaultProcDx();
     }
 };
-
-//////////////////////////////////////////////////////////////////////////////
-
-#endif  // ndef MZC4_MCONFIGDLG_HPP_

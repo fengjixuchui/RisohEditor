@@ -17,12 +17,10 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //////////////////////////////////////////////////////////////////////////////
 
-#ifndef STRING_RES_HPP_
-#define STRING_RES_HPP_
+#pragma once
 
 #include "MByteStreamEx.hpp"
 #include "MString.hpp"
-#include "ConstantsDB.hpp"
 #include <map>
 
 //////////////////////////////////////////////////////////////////////////////
@@ -32,8 +30,6 @@ struct STRING_ENTRY
     WCHAR StringID[128];
     WCHAR StringValue[512];
 };
-
-//////////////////////////////////////////////////////////////////////////////
 
 class StringRes
 {
@@ -47,113 +43,11 @@ public:
     {
     }
 
-    bool LoadFromStream(const MByteStreamEx& stream, WORD wName)
-    {
-        for (WORD i = 0; i < 16; ++i)
-        {
-            m_map.erase((wName - 1) * 16 + i);
-        }
+    bool LoadFromStream(const MByteStreamEx& stream, WORD wName);
+    bool SaveToStream(MByteStreamEx& stream, WORD wName);
 
-        WORD wLen;
-        for (WORD i = 0; i < 16; ++i)
-        {
-            if (!stream.ReadWord(wLen))
-                break;
-
-            if (wLen > 0)
-            {
-                string_type str(wLen, 0);
-                if (!stream.ReadData(&str[0], wLen * sizeof(WCHAR)))
-                    break;
-
-                m_map[(wName - 1) * 16 + i] = str;
-            }
-        }
-
-        return true;
-    }
-
-    bool SaveToStream(MByteStreamEx& stream, WORD wName)
-    {
-        WORD first, last;
-        GetIdRange(wName, first, last);
-
-        for (WORD i = first; i <= last; ++i)
-        {
-            const string_type& str = m_map[i];
-            WORD wLen = WORD(str.size());
-            if (!stream.WriteWord(wLen) ||
-                !stream.WriteData(&str[0], wLen * sizeof(WCHAR)))
-                return false;
-        }
-
-        return true;
-    }
-
-    string_type Dump(WORD wName)
-    {
-        string_type ret;
-
-        ret += L"STRINGTABLE\r\n";
-        ret += L"{\r\n";
-
-        WORD first, last;
-        GetIdRange(wName, first, last);
-        for (WORD i = first; i <= last; ++i)
-        {
-            if (m_map[i].empty())
-                continue;
-
-            ret += L"    ";
-            if (0)
-            {
-                ret += mstr_dec_word(i);
-            }
-            else
-            {
-                ret += g_db.GetNameOfResID(IDTYPE_STRING, IDTYPE_PROMPT, i);
-            }
-
-            ret += L", \"";
-            ret += mstr_escape(m_map[i]);
-            ret += L"\"\r\n";
-        }
-        ret += L"}\r\n";
-
-        return ret;
-    }
-
-    string_type Dump()
-    {
-        string_type ret;
-
-        ret += L"STRINGTABLE\r\n";
-        ret += L"{\r\n";
-
-        for (auto& pair : m_map)
-        {
-            if (pair.second.empty())
-                continue;
-
-            ret += L"    ";
-            if (0)
-            {
-                ret += mstr_dec_word(pair.first);
-            }
-            else
-            {
-                ret += g_db.GetNameOfResID(IDTYPE_STRING, IDTYPE_PROMPT, pair.first);
-            }
-
-            ret += L", \"";
-            ret += mstr_escape(pair.second);
-            ret += L"\"\r\n";
-        }
-
-        ret += L"}\r\n";
-
-        return ret;
-    }
+    string_type Dump(WORD wName);
+    string_type Dump();
 
     map_type& map()
     {
@@ -170,7 +64,3 @@ public:
         last = first + 16 - 1;
     }
 };
-
-//////////////////////////////////////////////////////////////////////////////
-
-#endif  // ndef STRING_RES_HPP_

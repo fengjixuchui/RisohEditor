@@ -1,0 +1,7 @@
+﻿1 MENU
+{
+    POPUP "&Plik"
+    {
+        MENUITEM "&Wyjście\tAlt+F4", 100
+    }
+}
